@@ -13,9 +13,9 @@ import time
 import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import Any
 from functools import partial
-import signal
+from typing import Any
+
 from fastapi import (
     Depends,
     FastAPI,
