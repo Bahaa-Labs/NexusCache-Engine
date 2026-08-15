@@ -37,7 +37,7 @@ jobs:
         run: |
           python3 -m pip install --upgrade pip setuptools wheel
           pip3 install torch --index-url https://download.pytorch.org/whl/cu121
-          pip3 install pybind11 pytest numpy ray fastapi prometheus-client pydantic
+          pip3 install pybind11 pytest numpy pandas scipy ray fastapi prometheus-client pydantic
 
       - name: Build C++/CUDA Extensions
         run: |
