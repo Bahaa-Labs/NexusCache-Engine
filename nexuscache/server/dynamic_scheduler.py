@@ -94,7 +94,7 @@ class DynamicSequence(Sequence):
         else:
             aging_score = (aging_ratio**2.0) * 50.0
 
-        return base_score + sla_urgency_score + prefix_score + aging_score
+        return float(base_score + sla_urgency_score + prefix_score + aging_score)
 
 
 @dataclass

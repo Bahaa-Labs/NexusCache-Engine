@@ -56,7 +56,7 @@ class ModelArchConfig:
     @property
     def element_size_bytes(self) -> int:
         """Returns element size in bytes based on torch dtype."""
-        return torch.tensor([], dtype=self.dtype).element_size()
+        return int(torch.tensor([], dtype=self.dtype).element_size())
 
     @property
     def bytes_per_token_all_layers(self) -> int:

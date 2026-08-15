@@ -106,14 +106,15 @@ class RayWorkerPool:
         """Spawns the actor pool across available Ray cluster nodes."""
         logger.info(f"[RayWorkerPool] Spawning {self.num_workers} worker actors...")
 
+        actor_cls = cast(Any, ModelWorkerActor)
         for i in range(self.num_workers):
-            actor = ModelWorkerActor.options(
+            actor = actor_cls.options(
                 num_gpus=self.worker_config.get("num_gpus_per_worker", 1),
                 max_restarts=self.actor_max_restarts,
                 max_task_retries=2,
             ).remote(worker_id=i, worker_config=self.worker_config)
 
-            self.actors.append(cast(ActorHandle, actor))  # <--- Add cast here
+            self.actors.append(cast(ActorHandle, actor))
             self._restart_counts[i] = 0
 
         self._is_running = True
@@ -147,11 +148,12 @@ class RayWorkerPool:
             return []
 
         object_refs = [
-            actor.execute_command.remote(command, payload) for actor in self.actors
+            actor.execute_command.remote(command, payload)  # type: ignore[attr-defined]
+            for actor in self.actors
         ]
         try:
-            # Offload ray.get to a thread pool so the asyncio event loop remains non-blocking
-            return await asyncio.to_thread(ray.get, object_refs)
+            # Wrap ray.get in a lambda to prevent asyncio.to_thread overload signature errors
+            return await asyncio.to_thread(lambda: ray.get(object_refs))
         except Exception as e:
             logger.error(f"[RayWorkerPool] Error during command broadcast: {e}")
             raise e
@@ -162,16 +164,21 @@ class RayWorkerPool:
             return
 
         logger.info("[RayWorkerPool] Propagating state synchronization to all workers.")
-        object_refs = [actor.update_state.remote(state_update) for actor in self.actors]
-        await asyncio.to_thread(ray.get, object_refs)
+        object_refs = [
+            actor.update_state.remote(state_update)  # type: ignore[attr-defined]
+            for actor in self.actors
+        ]
+        await asyncio.to_thread(lambda: ray.get(object_refs))
 
     async def _check_single_worker_health(
         self, idx: int, actor: ActorHandle
     ) -> tuple[int, bool]:
         """Pings an individual actor with a strict timeout."""
         try:
-            future = actor.ping.remote()
-            await asyncio.to_thread(ray.get, future, timeout=self.heartbeat_interval_s)
+            future = actor.ping.remote()  # type: ignore[attr-defined]
+            await asyncio.to_thread(
+                lambda: ray.get(future, timeout=self.heartbeat_interval_s)
+            )
             return idx, True
         except (RayActorError, RayTaskError, GetTimeoutError, Exception) as e:
             logger.error(f"[RayWorkerPool] Health check failed for worker {idx}: {e}")
@@ -216,7 +223,8 @@ class RayWorkerPool:
             except Exception:
                 pass
 
-            new_actor = ModelWorkerActor.options(
+            actor_cls = cast(Any, ModelWorkerActor)
+            new_actor = actor_cls.options(
                 num_gpus=self.worker_config.get("num_gpus_per_worker", 1),
                 max_restarts=self.actor_max_restarts,
             ).remote(worker_id=worker_id, worker_config=self.worker_config)

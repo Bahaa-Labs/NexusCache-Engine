@@ -12,7 +12,7 @@ import logging
 import time
 from collections.abc import Generator
 from contextlib import contextmanager
-
+from typing import cast
 from prometheus_client import (
     CollectorRegistry,
     Counter,
@@ -185,7 +185,7 @@ class EngineMetrics:
         """
         Renders the current Prometheus metrics snapshot into standard scrape format bytes.
         """
-        return generate_latest(self.registry)
+        return cast(bytes, generate_latest(self.registry))
 
 
 # ============================================================================

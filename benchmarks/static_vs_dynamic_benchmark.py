@@ -258,15 +258,17 @@ def run_simulation(
         dyn_config = DynamicSchedulerConfig(
             max_num_batched_tokens=getattr(config, "max_num_batched_tokens", 4096),
             max_num_seqs=config.max_num_seqs,
-            max_paged_blocks=256,  # Scaled up from 64 to eliminate block allocation stalls
+            max_paged_blocks=256,
             block_size=config.block_size,
             enable_prefix_caching=True,
         )
-        scheduler: DynamicScheduler | Scheduler = DynamicScheduler(
+        dynamic_scheduler = DynamicScheduler(
             config=dyn_config, block_manager=bm, page_table=pt
         )
+        scheduler = dynamic_scheduler
     else:
-        scheduler = Scheduler(config=config, block_manager=bm, page_table=pt)
+        static_scheduler = Scheduler(config=config, block_manager=bm, page_table=pt)
+        scheduler = static_scheduler
 
     metrics = BenchmarkMetrics(total_requests=len(workload))
     pending_workload = list(workload)
@@ -289,13 +291,13 @@ def run_simulation(
                     max_new_tokens=req.max_new_tokens,
                     priority=req.priority,
                     sla_target_ttft_ms=req.sla_target_ttft_ms,
-                )
-            else:
-                seq_id = scheduler.add_sequence(
-                    request_id=req.request_id,
-                    prompt_token_ids=req.prompt_token_ids,
-                    max_new_tokens=req.max_new_tokens,
-                )
+            )
+        else:
+            seq_id = scheduler.add_sequence(
+                request_id=req.request_id,
+                prompt_token_ids=req.prompt_token_ids,
+                max_new_tokens=req.max_new_tokens,
+            )
 
             active_seq_meta[seq_id] = {
                 "arrival_time": req.arrival_time,
@@ -307,9 +309,9 @@ def run_simulation(
 
         # 2. Run scheduler step pass with simulation time alignment
         if isinstance(scheduler, DynamicScheduler):
-            batch: BatchOutput = scheduler.schedule(sim_time=current_sim_time)
+            batch = scheduler.schedule(sim_time=current_sim_time)
         else:
-            batch: BatchOutput = scheduler.schedule()
+            batch = scheduler.schedule()
 
         if batch.preempted_seqs:
             metrics.preemption_count += len(batch.preempted_seqs)
