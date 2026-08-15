@@ -261,9 +261,7 @@ def run_simulation(
             block_size=config.block_size,
             enable_prefix_caching=True,
         )
-        scheduler = DynamicScheduler(
-            config=dyn_config, block_manager=bm, page_table=pt
-        )
+        scheduler = DynamicScheduler(config=dyn_config, block_manager=bm, page_table=pt)
     else:
         scheduler = Scheduler(config=config, block_manager=bm, page_table=pt)
 
