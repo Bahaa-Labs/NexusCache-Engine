@@ -147,7 +147,7 @@ class WorkloadDistributionFitter:
         else:
             raise ValueError(f"Unsupported distribution type: {params.dist_type}")
 
-        return np.clip(np.round(samples), 1, None).astype(int)
+        return np.clip(np.round(samples), 1, None).astype(int)  # type: ignore[no-any-return]
 
 
 class VRAMSaturationModel:

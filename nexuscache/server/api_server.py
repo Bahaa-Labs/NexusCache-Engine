@@ -1,6 +1,4 @@
 """
-NexusCache API Server Gateway
-=============================
 Production-grade OpenAI-compatible REST API server gateway providing real-time
 token streaming via Server-Sent Events (SSE), OpenTelemetry tracing, Prometheus
 metrics, rate limiting, authentication, and graceful signal-handling shutdown.
@@ -16,7 +14,8 @@ import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any
-
+from functools import partial
+import signal
 from fastapi import (
     Depends,
     FastAPI,
@@ -137,6 +136,11 @@ class ServerState:
 server_state = ServerState()
 
 
+async def _handle_signal(sig: signal.Signals) -> None:
+    """Explicitly typed callback wrapper for signal task creation to satisfy mypy."""
+    await shutdown_handler(sig)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manages server startup initialization and graceful connection-draining shutdown."""
@@ -145,11 +149,13 @@ async def lifespan(app: FastAPI):
 
     # Setup signal traps for graceful shutdown
     loop = asyncio.get_running_loop()
+
+    def _signal_callback(sig_num: signal.Signals) -> None:
+        asyncio.create_task(shutdown_handler(sig_num))
+
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
-            loop.add_signal_handler(
-                sig, lambda s=sig: asyncio.create_task(shutdown_handler(s))
-            )
+            loop.add_signal_handler(sig, partial(_signal_callback, sig))
         except NotImplementedError:
             pass  # Windows signal handler fallback
 

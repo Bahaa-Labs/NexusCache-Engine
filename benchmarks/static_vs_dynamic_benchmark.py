@@ -10,6 +10,7 @@ import json
 import math
 import random
 from dataclasses import dataclass, field
+from typing import Any
 
 from nexuscache.server.dynamic_scheduler import (
     DynamicScheduler,
@@ -17,8 +18,6 @@ from nexuscache.server.dynamic_scheduler import (
     DynamicSequence,
     PriorityLevel,
 )
-
-# Import Scheduler primitives
 from nexuscache.server.scheduler import (
     Scheduler,
     SchedulerConfig,
@@ -93,7 +92,7 @@ class FallbackPageTable:
         return self.active_sequences.get(seq_id, [])
 
 
-def create_memory_subsystem(num_blocks: int, block_size: int):
+def create_memory_subsystem(num_blocks: int, block_size: int) -> tuple[Any, Any]:
     """Instantiates C++ BlockManager/PageTable or falls back to Python stubs."""
     try:
         import nexuscache._C as _C
@@ -253,6 +252,7 @@ def run_simulation(
     """Executes discrete event step simulation loop for static vs dynamic schedulers."""
     bm, pt = create_memory_subsystem(config.max_paged_blocks, config.block_size)
 
+    scheduler: Scheduler
     if scheduler_type == "dynamic":
         dyn_config = DynamicSchedulerConfig(
             max_num_batched_tokens=getattr(config, "max_num_batched_tokens", 4096),
@@ -261,17 +261,15 @@ def run_simulation(
             block_size=config.block_size,
             enable_prefix_caching=True,
         )
-        dynamic_scheduler = DynamicScheduler(
+        scheduler = DynamicScheduler(
             config=dyn_config, block_manager=bm, page_table=pt
         )
-        scheduler = dynamic_scheduler
     else:
-        static_scheduler = Scheduler(config=config, block_manager=bm, page_table=pt)
-        scheduler = static_scheduler
+        scheduler = Scheduler(config=config, block_manager=bm, page_table=pt)
 
     metrics = BenchmarkMetrics(total_requests=len(workload))
     pending_workload = list(workload)
-    active_seq_meta: dict[int, dict] = {}
+    active_seq_meta: dict[int, dict[str, Any]] = {}
 
     current_sim_time = 0.0
 
@@ -291,12 +289,12 @@ def run_simulation(
                     priority=req.priority,
                     sla_target_ttft_ms=req.sla_target_ttft_ms,
                 )
-        else:
-            seq_id = scheduler.add_sequence(
-                request_id=req.request_id,
-                prompt_token_ids=req.prompt_token_ids,
-                max_new_tokens=req.max_new_tokens,
-            )
+            else:
+                seq_id = scheduler.add_sequence(
+                    request_id=req.request_id,
+                    prompt_token_ids=req.prompt_token_ids,
+                    max_new_tokens=req.max_new_tokens,
+                )
 
             active_seq_meta[seq_id] = {
                 "arrival_time": req.arrival_time,
@@ -534,7 +532,7 @@ def print_results(static_m: BenchmarkMetrics, dyn_m: BenchmarkMetrics) -> None:
 # ============================================================================
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="NexusCache Static vs. Dynamic Scheduler Benchmark"
     )
