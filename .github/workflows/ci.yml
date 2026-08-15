@@ -50,16 +50,17 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Install CPU PyTorch & Dependencies
+      - name: Install CPU PyTorch & Build Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install cmake ninja pybind11 pytest pytest-cov pytest-asyncio numpy ray fastapi prometheus-client pydantic
-          pip install --no-build-isolation -e .
+          pip install cmake ninja pybind11 pytest pytest-cov pytest-asyncio \
+                      numpy pandas scipy ray fastapi prometheus-client pydantic
 
-      - name: Build CPU Native Extensions
+      - name: Build C++ Extension Modules
         run: |
-          python setup.py build_ext --inplace || true
+          python setup.py build_ext --inplace
+          pip install --no-build-isolation -e .
 
       - name: Run Unit Tests with Coverage
         env:
