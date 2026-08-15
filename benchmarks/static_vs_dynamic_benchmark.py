@@ -290,7 +290,7 @@ def run_simulation(
                     max_new_tokens=req.max_new_tokens,
                     priority=req.priority,
                     sla_target_ttft_ms=req.sla_target_ttft_ms,
-            )
+                )
         else:
             seq_id = scheduler.add_sequence(
                 request_id=req.request_id,
