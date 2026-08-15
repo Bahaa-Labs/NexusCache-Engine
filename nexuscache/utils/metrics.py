@@ -13,6 +13,7 @@ import time
 from collections.abc import Generator
 from contextlib import contextmanager
 from typing import cast
+
 from prometheus_client import (
     CollectorRegistry,
     Counter,

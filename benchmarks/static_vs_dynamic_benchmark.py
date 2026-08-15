@@ -20,7 +20,6 @@ from nexuscache.server.dynamic_scheduler import (
 
 # Import Scheduler primitives
 from nexuscache.server.scheduler import (
-    BatchOutput,
     Scheduler,
     SchedulerConfig,
 )
