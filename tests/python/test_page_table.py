@@ -8,6 +8,7 @@ import torch
 
 try:
     import nexuscache._C as C_ext
+
     HAS_EXTENSION = True
 except ImportError:
     HAS_EXTENSION = False
@@ -58,7 +59,7 @@ class TestPageTable:
     def test_block_table_and_slot_mapping_tensors(self):
         """Test conversion to PyTorch CUDA block table and slot mapping tensors."""
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        
+
         seq1, seq2 = 1, 2
         self.page_table.register_sequence(seq1)
         self.page_table.register_sequence(seq2)
@@ -72,5 +73,7 @@ class TestPageTable:
         assert bt_tensor[1, 1].item() == -1  # Padding for shorter sequence
 
         # Verify slot mapping tensor
-        slot_tensor = self.page_table.get_slot_mapping_tensor([seq1, seq2], [4, 2], device)
+        slot_tensor = self.page_table.get_slot_mapping_tensor(
+            [seq1, seq2], [4, 2], device
+        )
         assert slot_tensor.shape == (6,)  # 4 + 2 total query tokens

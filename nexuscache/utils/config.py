@@ -1,25 +1,22 @@
 """
 Configuration Management Module
 ==========================================
-Provides type-safe, validated, and environment-aware configuration schemas for 
+Provides type-safe, validated, and environment-aware configuration schemas for
 distributed LLM inference, memory management, and request scheduling.
 
 Utilizes Pydantic v2 BaseSettings for environment variable parsing, YAML ingestion,
 and strict runtime validation.
 """
 
-from enum import Enum
 import logging
 import os
+from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any
 
 import yaml
 from pydantic import (
-    AliasChoices,
     Field,
-    FieldError,
-    ValidationInfo,
     field_validator,
     model_validator,
 )
@@ -31,6 +28,7 @@ logger = logging.getLogger("nexuscache.utils.config")
 # ============================================================================
 # Enums for Constrained Settings
 # ============================================================================
+
 
 class QuantizationType(str, Enum):
     NONE = "none"
@@ -56,15 +54,17 @@ class SchedulingPolicy(str, Enum):
 # Nested Sub-Configurations
 # ============================================================================
 
+
 class ModelConfig(BaseSettings):
     """Configuration options governing the LLM architecture and quantization."""
+
     model_config = SettingsConfigDict(frozen=True)
 
     model_path: str = Field(
         ...,
         description="Path to HuggingFace model checkpoint directory or repository ID.",
     )
-    tokenizer_path: Optional[str] = Field(
+    tokenizer_path: str | None = Field(
         default=None,
         description="Optional explicit path to tokenizer (defaults to model_path).",
     )
@@ -105,6 +105,7 @@ class ModelConfig(BaseSettings):
 
 class CacheConfig(BaseSettings):
     """Configuration options for physical VRAM Page Table and KV-Cache Memory Pool."""
+
     model_config = SettingsConfigDict(frozen=True)
 
     block_size: int = Field(
@@ -136,12 +137,15 @@ class CacheConfig(BaseSettings):
     @classmethod
     def validate_block_size(cls, v: int) -> int:
         if v not in (8, 16, 32, 64):
-            raise ValueError("block_size must be a power-of-two block unit (8, 16, 32, or 64).")
+            raise ValueError(
+                "block_size must be a power-of-two block unit (8, 16, 32, or 64)."
+            )
         return v
 
 
 class SchedulerConfig(BaseSettings):
     """Configuration parameters for the SLA-aware dynamic iteration batching engine."""
+
     model_config = SettingsConfigDict(frozen=True)
 
     max_num_batched_tokens: int = Field(
@@ -173,6 +177,7 @@ class SchedulerConfig(BaseSettings):
 
 class RayClusterConfig(BaseSettings):
     """Configuration options for multi-GPU/multi-node Ray distributed actor clusters."""
+
     model_config = SettingsConfigDict(frozen=True)
 
     tensor_parallel_size: int = Field(
@@ -206,11 +211,13 @@ class RayClusterConfig(BaseSettings):
 # Main Engine System Configuration
 # ============================================================================
 
+
 class EngineConfig(BaseSettings):
     """
     Root Configuration Object consolidating all LLM server components.
     Automatically parses environment variables with prefix 'NEXUSCACHE_'.
     """
+
     model_config = SettingsConfigDict(
         env_prefix="NEXUSCACHE_",
         env_nested_delimiter="__",
@@ -220,8 +227,10 @@ class EngineConfig(BaseSettings):
     )
 
     server_host: str = Field(default="0.0.0.0", description="API Server bind IP.")
-    server_port: int = Field(default=8000, ge=1024, le=65535, description="API Server port.")
-    
+    server_port: int = Field(
+        default=8000, ge=1024, le=65535, description="API Server port."
+    )
+
     # Sub-component configurations
     model: ModelConfig
     cache: CacheConfig = Field(default_factory=CacheConfig)
@@ -229,7 +238,7 @@ class EngineConfig(BaseSettings):
     ray_cluster: RayClusterConfig = Field(default_factory=RayClusterConfig)
 
     @classmethod
-    def from_yaml(cls, yaml_path: Union[str, Path]) -> "EngineConfig":
+    def from_yaml(cls, yaml_path: str | Path) -> "EngineConfig":
         """
         Loads configuration from a YAML file, allowing environment variable overrides.
         """
@@ -238,15 +247,17 @@ class EngineConfig(BaseSettings):
             raise FileNotFoundError(f"Configuration YAML file not found: {path}")
 
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 raw_data = yaml.safe_load(f) or {}
 
             if not isinstance(raw_data, dict):
-                raise ValueError(f"YAML content in {path} must be a top-level dictionary/mapping.")
+                raise ValueError(
+                    f"YAML content in {path} must be a top-level dictionary/mapping."
+                )
 
             # Ensure all keys are strings for static type checkers
-            typed_data: Dict[str, Any] = {str(k): v for k, v in raw_data.items()}
-            
+            typed_data: dict[str, Any] = {str(k): v for k, v in raw_data.items()}
+
             logger.info(f"Loaded configuration from file: {path.resolve()}")
             return cls(**typed_data)
         except yaml.YAMLError as e:
@@ -258,7 +269,7 @@ class EngineConfig(BaseSettings):
 # Global Configuration Factory Singleton Helper
 # ============================================================================
 
-_GLOBAL_CONFIG: Optional[EngineConfig] = None
+_GLOBAL_CONFIG: EngineConfig | None = None
 
 
 def get_config() -> EngineConfig:
@@ -273,8 +284,8 @@ def get_config() -> EngineConfig:
 
 
 def initialize_config(
-    yaml_path: Optional[Union[str, Path]] = None,
-    overrides: Optional[Dict[str, Any]] = None,
+    yaml_path: str | Path | None = None,
+    overrides: dict[str, Any] | None = None,
 ) -> EngineConfig:
     """
     Initializes and freezes global configuration singleton from YAML + Env Vars + Overrides.
@@ -286,15 +297,19 @@ def initialize_config(
     else:
         # Fallback to pure environment variables and defaults
         config = EngineConfig(
-            model=ModelConfig(model_path=os.getenv("NEXUSCACHE_MODEL__MODEL_PATH", "facebook/opt-125m"))
+            model=ModelConfig(
+                model_path=os.getenv(
+                    "NEXUSCACHE_MODEL__MODEL_PATH", "facebook/opt-125m"
+                )
+            )
         )
 
     if overrides:
         # Re-instantiate model with explicitly passed CLI/Python dictionary overrides
         current_data = config.model_dump()
-        
+
         # Deep merge dictionary helper
-        def _deep_update(d: Dict[str, Any], u: Dict[str, Any]) -> Dict[str, Any]:
+        def _deep_update(d: dict[str, Any], u: dict[str, Any]) -> dict[str, Any]:
             for k, v in u.items():
                 if isinstance(v, dict) and k in d and isinstance(d[k], dict):
                     d[k] = _deep_update(d[k], v)

@@ -4,23 +4,23 @@ comparisons across caching paradigms (e.g., Standard Cache vs. NexusCache Paged 
 """
 
 import asyncio
-from dataclasses import asdict, dataclass, field
-from enum import Enum
 import logging
-import math
 import random
 import time
-from typing import Any, AsyncIterator, Dict, List, Optional, Protocol, Tuple
+from collections.abc import AsyncIterator
+from dataclasses import asdict, dataclass, field
+from enum import Enum
+from typing import Any, Protocol
 
 import numpy as np
 import pandas as pd
-import torch
 
 logger = logging.getLogger("nexuscache.analytics.ab_testing_harness")
 
 
 class CacheStrategy(Enum):
     """Supported caching strategies for A/B benchmarking."""
+
     STANDARD_KV_CACHE = "STANDARD_KV_CACHE"
     NEXUS_PAGED_CACHE = "NEXUS_PAGED_CACHE"
 
@@ -28,33 +28,36 @@ class CacheStrategy(Enum):
 @dataclass(frozen=True)
 class RequestSpec:
     """Specification for a single inference request in the synthetic stream."""
+
     request_id: str
     prompt_tokens: int
     max_gen_tokens: int
     arrival_offset_sec: float
-    prefix_block_ids: List[int] = field(default_factory=list)
+    prefix_block_ids: list[int] = field(default_factory=list)
 
 
 @dataclass
 class RequestMetric:
     """Detailed performance metrics for a single completed request."""
+
     request_id: str
     strategy: str
     prompt_tokens: int
     gen_tokens: int
-    ttft_ms: float                 # Time To First Token (Prefill phase latency)
-    tpot_ms: float                 # Time Per Output Token (Average Decode phase step latency)
-    total_latency_ms: float        # End-to-end total request latency
-    cache_hits: int                # Number of KV blocks/tokens matched in prefix cache
-    cache_misses: int              # Number of KV blocks/tokens required to be computed
-    cache_hit_ratio: float         # cache_hits / (cache_hits + cache_misses)
+    ttft_ms: float  # Time To First Token (Prefill phase latency)
+    tpot_ms: float  # Time Per Output Token (Average Decode phase step latency)
+    total_latency_ms: float  # End-to-end total request latency
+    cache_hits: int  # Number of KV blocks/tokens matched in prefix cache
+    cache_misses: int  # Number of KV blocks/tokens required to be computed
+    cache_hit_ratio: float  # cache_hits / (cache_hits + cache_misses)
     success: bool
-    error_message: Optional[str] = None
+    error_message: str | None = None
 
 
 @dataclass
 class BenchmarkSummary:
     """Aggregated benchmarking metrics report across an entire test run."""
+
     strategy: str
     total_requests: int
     successful_requests: int
@@ -71,13 +74,13 @@ class BenchmarkSummary:
     p99_tpot_ms: float
     avg_total_latency_ms: float
     overall_cache_hit_ratio: float
-    raw_metrics: List[RequestMetric] = field(default_factory=list, repr=False)
+    raw_metrics: list[RequestMetric] = field(default_factory=list, repr=False)
 
     def to_dataframe(self) -> pd.DataFrame:
         """Converts raw request metrics into a Pandas DataFrame."""
         return pd.DataFrame([asdict(m) for m in self.raw_metrics])
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Returns clean structured JSON-serializable dictionary summary."""
         res = asdict(self)
         res.pop("raw_metrics", None)
@@ -91,7 +94,7 @@ class CacheEngineProtocol(Protocol):
         """Processes request and yields generated tokens asynchronously."""
         ...
 
-    def get_cache_stats(self) -> Tuple[int, int]:
+    def get_cache_stats(self) -> tuple[int, int]:
         """Returns tuple of (total_hits, total_misses)."""
         ...
 
@@ -109,13 +112,13 @@ class SyntheticWorkloadGenerator:
         std_gen_len: int = 32,
         shared_prefix_ratio: float = 0.3,
         num_shared_prefixes: int = 4,
-        seed: int = 42
-    ) -> List[RequestSpec]:
+        seed: int = 42,
+    ) -> list[RequestSpec]:
         """Generates a reproducible list of request specifications with Poisson arrival delays."""
         random.seed(seed)
         np.random.seed(seed)
 
-        requests: List[RequestSpec] = []
+        requests: list[RequestSpec] = []
         current_time = 0.0
 
         for i in range(num_requests):
@@ -136,7 +139,7 @@ class SyntheticWorkloadGenerator:
                     prompt_tokens=prompt_len,
                     max_gen_tokens=gen_len,
                     arrival_offset_sec=current_time,
-                    prefix_block_ids=prefix_ids
+                    prefix_block_ids=prefix_ids,
                 )
             )
 
@@ -146,13 +149,15 @@ class SyntheticWorkloadGenerator:
 class MockCacheEngine:
     """High-fidelity simulated cache engine representing Standard or NexusCache behavior."""
 
-    def __init__(self, strategy: CacheStrategy, simulated_compute_ms_per_tok: float = 0.5):
+    def __init__(
+        self, strategy: CacheStrategy, simulated_compute_ms_per_tok: float = 0.5
+    ):
         self.strategy = strategy
         self.compute_speed = simulated_compute_ms_per_tok
         self.cache_hits = 0
         self.cache_misses = 0
 
-    def get_cache_stats(self) -> Tuple[int, int]:
+    def get_cache_stats(self) -> tuple[int, int]:
         return self.cache_hits, self.cache_misses
 
     async def process_request(self, spec: RequestSpec) -> AsyncIterator[str]:
@@ -187,15 +192,12 @@ class ABTestingHarness:
         self.semaphore = asyncio.Semaphore(concurrency_limit)
 
     async def _execute_single_request(
-        self,
-        engine: CacheEngineProtocol,
-        spec: RequestSpec,
-        strategy_label: str
+        self, engine: CacheEngineProtocol, spec: RequestSpec, strategy_label: str
     ) -> RequestMetric:
         """Executes a single request while taking precise high-resolution metrics."""
         async with self.semaphore:
             start_time = time.perf_counter()
-            first_token_time: Optional[float] = None
+            first_token_time: float | None = None
             generated_tokens = 0
             initial_hits, initial_misses = engine.get_cache_stats()
 
@@ -234,12 +236,14 @@ class ABTestingHarness:
                     cache_hits=req_hits,
                     cache_misses=req_misses,
                     cache_hit_ratio=hit_ratio,
-                    success=True
+                    success=True,
                 )
 
             except Exception as exc:
                 end_time = time.perf_counter()
-                logger.error(f"Request {spec.request_id} failed under {strategy_label}: {str(exc)}")
+                logger.error(
+                    f"Request {spec.request_id} failed under {strategy_label}: {str(exc)}"
+                )
                 return RequestMetric(
                     request_id=spec.request_id,
                     strategy=strategy_label,
@@ -252,17 +256,19 @@ class ABTestingHarness:
                     cache_misses=0,
                     cache_hit_ratio=0.0,
                     success=False,
-                    error_message=str(exc)
+                    error_message=str(exc),
                 )
 
     async def run_benchmark(
         self,
         engine: CacheEngineProtocol,
         strategy: CacheStrategy,
-        workload: List[RequestSpec]
+        workload: list[RequestSpec],
     ) -> BenchmarkSummary:
         """Runs concurrent workload benchmark for a specific caching engine."""
-        logger.info(f"Starting A/B benchmark run for strategy: {strategy.value} ({len(workload)} requests)")
+        logger.info(
+            f"Starting A/B benchmark run for strategy: {strategy.value} ({len(workload)} requests)"
+        )
         start_benchmark_time = time.perf_counter()
 
         async def scheduled_worker(spec: RequestSpec) -> RequestMetric:
@@ -271,7 +277,7 @@ class ABTestingHarness:
             return await self._execute_single_request(engine, spec, strategy.value)
 
         tasks = [asyncio.create_task(scheduled_worker(req)) for req in workload]
-        results: List[RequestMetric] = await asyncio.gather(*tasks)
+        results: list[RequestMetric] = await asyncio.gather(*tasks)
 
         end_benchmark_time = time.perf_counter()
         total_duration = end_benchmark_time - start_benchmark_time
@@ -283,7 +289,9 @@ class ABTestingHarness:
             raise RuntimeError(f"All requests failed for strategy {strategy.value}")
 
         total_generated_tokens = sum(r.gen_tokens for r in successful)
-        throughput = total_generated_tokens / total_duration if total_duration > 0 else 0.0
+        throughput = (
+            total_generated_tokens / total_duration if total_duration > 0 else 0.0
+        )
 
         ttfts = [r.ttft_ms for r in successful]
         tpots = [r.tpot_ms for r in successful]
@@ -311,7 +319,7 @@ class ABTestingHarness:
             p99_tpot_ms=float(np.percentile(tpots, 99)),
             avg_total_latency_ms=float(np.mean(total_latencies)),
             overall_cache_hit_ratio=overall_hit_ratio,
-            raw_metrics=results
+            raw_metrics=results,
         )
 
 
@@ -325,22 +333,32 @@ if __name__ == "__main__":
             request_rate_qps=20.0,
             mean_prompt_len=256,
             mean_gen_len=64,
-            shared_prefix_ratio=0.5
+            shared_prefix_ratio=0.5,
         )
 
         harness = ABTestingHarness(concurrency_limit=16)
 
         std_engine = MockCacheEngine(CacheStrategy.STANDARD_KV_CACHE)
-        std_summary = await harness.run_benchmark(std_engine, CacheStrategy.STANDARD_KV_CACHE, workload)
+        std_summary = await harness.run_benchmark(
+            std_engine, CacheStrategy.STANDARD_KV_CACHE, workload
+        )
 
         nexus_engine = MockCacheEngine(CacheStrategy.NEXUS_PAGED_CACHE)
-        nexus_summary = await harness.run_benchmark(nexus_engine, CacheStrategy.NEXUS_PAGED_CACHE, workload)
+        nexus_summary = await harness.run_benchmark(
+            nexus_engine, CacheStrategy.NEXUS_PAGED_CACHE, workload
+        )
 
         print("\n=== A/B Test Execution Summary ===")
-        comparison_df = pd.DataFrame([
-            std_summary.to_dict(),
-            nexus_summary.to_dict()
-        ])[["strategy", "system_throughput_tok_per_sec", "avg_ttft_ms", "p90_ttft_ms", "avg_tpot_ms", "overall_cache_hit_ratio"]]
+        comparison_df = pd.DataFrame([std_summary.to_dict(), nexus_summary.to_dict()])[
+            [
+                "strategy",
+                "system_throughput_tok_per_sec",
+                "avg_ttft_ms",
+                "p90_ttft_ms",
+                "avg_tpot_ms",
+                "overall_cache_hit_ratio",
+            ]
+        ]
 
         print(comparison_df.to_string(index=False))
 

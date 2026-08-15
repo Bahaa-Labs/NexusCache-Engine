@@ -8,13 +8,16 @@ import torch
 
 try:
     import nexuscache._C as C_ext
+
     HAS_EXTENSION = True
 except ImportError:
     HAS_EXTENSION = False
 
 
-@pytest.mark.skipif(not (HAS_EXTENSION and torch.cuda.is_available()), 
-                    reason="Requires PyTorch GPU support and compiled nexuscache._C extension.")
+@pytest.mark.skipif(
+    not (HAS_EXTENSION and torch.cuda.is_available()),
+    reason="Requires PyTorch GPU support and compiled nexuscache._C extension.",
+)
 class TestNexusCacheNativeExtension:
 
     def setup_method(self):
@@ -57,7 +60,7 @@ class TestNexusCacheNativeExtension:
         # Append 40 tokens (should allocate 3 blocks: ceil(40/16))
         page_table.append_tokens(seq_id, 40)
         assert page_table.get_sequence_length(seq_id) == 40
-        
+
         block_table = page_table.get_block_table(seq_id)
         assert len(block_table) == 3
 
@@ -77,7 +80,7 @@ class TestNexusCacheNativeExtension:
 
         key_ptr = manager.get_key_cache_ptr()
         val_ptr = manager.get_value_cache_ptr()
-        
+
         # Calculate exact byte size for one block directly from allocated physical tensor
         elem_size = key_cache.element_size()
         block_bytes = key_cache[0].numel() * elem_size
@@ -91,7 +94,7 @@ class TestNexusCacheNativeExtension:
             cache_ptr=key_ptr,
             block_indices=[2, 4],
             block_bytes=block_bytes,
-            stream_ptr=torch.cuda.current_stream().cuda_stream
+            stream_ptr=torch.cuda.current_stream().cuda_stream,
         )
         torch.cuda.synchronize()
 
@@ -115,7 +118,7 @@ class TestNexusCacheNativeExtension:
             head_dim=self.config.head_dim,
             block_size=self.config.block_size,
             elem_size_bytes=elem_size,
-            stream_ptr=torch.cuda.current_stream().cuda_stream
+            stream_ptr=torch.cuda.current_stream().cuda_stream,
         )
         torch.cuda.synchronize()
 

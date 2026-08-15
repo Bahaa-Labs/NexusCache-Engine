@@ -5,11 +5,13 @@ and memory recycling mechanisms via NexusCacheEngine wrapper.
 
 import pytest
 import torch
+
 import nexuscache._C as _C
 from nexuscache.cache_engine import NexusCacheEngine
 
 # Guard against running on non-CUDA CI environment
 CUDA_AVAILABLE = torch.cuda.is_available()
+
 
 @pytest.fixture
 def cache_engine():
@@ -25,7 +27,9 @@ def cache_engine():
     )
 
 
-@pytest.mark.skipif(not CUDA_AVAILABLE, reason="CUDA hardware is required for memory subsystem tests")
+@pytest.mark.skipif(
+    not CUDA_AVAILABLE, reason="CUDA hardware is required for memory subsystem tests"
+)
 class TestMemorySubsystem:
 
     def test_raw_cuda_pointer_interfacing(self, cache_engine: NexusCacheEngine):
@@ -36,7 +40,9 @@ class TestMemorySubsystem:
         # Pointer validity checks
         assert key_ptr > 0, "Key cache pointer is invalid"
         assert val_ptr > 0, "Value cache pointer is invalid"
-        assert key_ptr != val_ptr, "Key and Value caches must reside at distinct physical VRAM addresses"
+        assert (
+            key_ptr != val_ptr
+        ), "Key and Value caches must reside at distinct physical VRAM addresses"
 
         # Verify C++ pointer extraction matches PyTorch tensor data pointers
         key_cache, val_cache = cache_engine.get_physical_kv_tensors()
@@ -45,16 +51,18 @@ class TestMemorySubsystem:
         assert _C.get_tensor_device_ptr(key_cache) == key_ptr
         assert _C.get_tensor_device_ptr(val_cache) == val_ptr
 
-    def test_sequence_lifecycle_and_dynamic_allocation(self, cache_engine: NexusCacheEngine):
+    def test_sequence_lifecycle_and_dynamic_allocation(
+        self, cache_engine: NexusCacheEngine
+    ):
         """2. Verify token allocation, block mapping, and kernel metadata tensor shape generation."""
         seq_id = 99
         cache_engine.register_sequence(seq_id)
-        
+
         # Allocating 33 tokens with block_size=16 requires ceil(33/16) = 3 physical blocks
         slots = cache_engine.allocate_tokens(seq_id, num_tokens=33)
 
         assert len(slots) == 33
-        
+
         # Prepare metadata tensors for CUDA kernel execution
         block_tables, slot_mapping = cache_engine.prepare_kernel_metadata(
             sequence_ids=[seq_id], query_lens=[33]
@@ -67,14 +75,18 @@ class TestMemorySubsystem:
         assert slot_mapping.shape[0] == 33
         assert slot_mapping.is_cuda
 
-    def test_memory_recycling_and_block_deallocation(self, cache_engine: NexusCacheEngine):
+    def test_memory_recycling_and_block_deallocation(
+        self, cache_engine: NexusCacheEngine
+    ):
         """3. Verify freeing sequence returns all physical VRAM blocks back to the free pool."""
         initial_free = cache_engine.block_manager.get_num_free_blocks()
         assert initial_free == 128
 
         seq_id = 101
         cache_engine.register_sequence(seq_id)
-        cache_engine.allocate_tokens(seq_id, num_tokens=64)  # 64 tokens = 4 blocks (64 / 16)
+        cache_engine.allocate_tokens(
+            seq_id, num_tokens=64
+        )  # 64 tokens = 4 blocks (64 / 16)
 
         assert cache_engine.block_manager.get_num_free_blocks() == 128 - 4
 

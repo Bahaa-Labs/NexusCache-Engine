@@ -1,46 +1,46 @@
 """
 NexusCache API Server Gateway
 =============================
-Production-grade OpenAI-compatible REST API server gateway providing real-time 
-token streaming via Server-Sent Events (SSE), OpenTelemetry tracing, Prometheus 
+Production-grade OpenAI-compatible REST API server gateway providing real-time
+token streaming via Server-Sent Events (SSE), OpenTelemetry tracing, Prometheus
 metrics, rate limiting, authentication, and graceful signal-handling shutdown.
 """
 
 import asyncio
-from contextlib import asynccontextmanager
 import json
 import logging
 import os
 import signal
 import time
 import uuid
-from typing import Any, AsyncGenerator, Dict, List, Optional, Union
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import (
-    BackgroundTasks,
     Depends,
     FastAPI,
-    HTTPException,
     Header,
+    HTTPException,
     Request,
     Response,
     status,
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
 from prometheus_client import (
+    CONTENT_TYPE_LATEST,
     Counter,
     Gauge,
     Histogram,
     generate_latest,
-    CONTENT_TYPE_LATEST,
 )
+from pydantic import BaseModel, Field
 
 # OpenTelemetry imports (Fallback gracefully if not configured)
 try:
     from opentelemetry import trace
-    from opentelemetry.trace import Status, StatusCode
+
     tracer = trace.get_tracer("nexuscache.api_server")
 except ImportError:
     tracer = None
@@ -84,6 +84,7 @@ ACTIVE_SESSIONS = Gauge(
 # Pydantic Schemas (OpenAI-Compatible Spec)
 # ============================================================================
 
+
 class ChatMessage(BaseModel):
     role: str = Field(..., description="Role of the speaker (system, user, assistant).")
     content: str = Field(..., description="Content of the message.")
@@ -91,36 +92,47 @@ class ChatMessage(BaseModel):
 
 class CompletionRequest(BaseModel):
     model: str = Field(default="default-model", description="Target model name.")
-    prompt: Union[str, List[str]] = Field(..., description="Input prompt text.")
-    max_tokens: int = Field(default=128, ge=1, le=8192, description="Maximum tokens to generate.")
+    prompt: str | list[str] = Field(..., description="Input prompt text.")
+    max_tokens: int = Field(
+        default=128, ge=1, le=8192, description="Maximum tokens to generate."
+    )
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     top_p: float = Field(default=1.0, ge=0.0, le=1.0)
-    stream: bool = Field(default=False, description="Enable real-time token streaming via SSE.")
-    user: Optional[str] = Field(default=None, description="Unique client identifier.")
+    stream: bool = Field(
+        default=False, description="Enable real-time token streaming via SSE."
+    )
+    user: str | None = Field(default=None, description="Unique client identifier.")
 
 
 class ChatCompletionRequest(BaseModel):
     model: str = Field(default="default-model", description="Target model name.")
-    messages: List[ChatMessage] = Field(..., description="Array of chat messages.")
-    max_tokens: int = Field(default=128, ge=1, le=8192, description="Maximum tokens to generate.")
+    messages: list[ChatMessage] = Field(..., description="Array of chat messages.")
+    max_tokens: int = Field(
+        default=128, ge=1, le=8192, description="Maximum tokens to generate."
+    )
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     top_p: float = Field(default=1.0, ge=0.0, le=1.0)
-    stream: bool = Field(default=False, description="Enable real-time token streaming via SSE.")
-    user: Optional[str] = Field(default=None, description="Unique client identifier.")
+    stream: bool = Field(
+        default=False, description="Enable real-time token streaming via SSE."
+    )
+    user: str | None = Field(default=None, description="Unique client identifier.")
 
 
 # ============================================================================
 # API Server State & Application Context
 # ============================================================================
 
+
 class ServerState:
     """Global server runtime context managing active connections and shutdown lifecycle."""
+
     def __init__(self, max_concurrent_requests: int = 1024):
         self.is_draining: bool = False
         self.active_request_count: int = 0
         self.max_concurrent_requests: int = max_concurrent_requests
         self.concurrency_semaphore = asyncio.Semaphore(max_concurrent_requests)
-        self.api_key: Optional[str] = os.getenv("NEXUSCACHE_API_KEY", None)
+        self.api_key: str | None = os.getenv("NEXUSCACHE_API_KEY", None)
+
 
 server_state = ServerState()
 
@@ -135,7 +147,9 @@ async def lifespan(app: FastAPI):
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
-            loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(shutdown_handler(s)))
+            loop.add_signal_handler(
+                sig, lambda s=sig: asyncio.create_task(shutdown_handler(s))
+            )
         except NotImplementedError:
             pass  # Windows signal handler fallback
 
@@ -143,16 +157,23 @@ async def lifespan(app: FastAPI):
 
     logger.info("Executing graceful server shutdown...")
     server_state.is_draining = True
-    
+
     # Drain active in-flight requests (Up to 15-second grace period)
     grace_period_sec = 15.0
     start_drain = time.perf_counter()
-    while server_state.active_request_count > 0 and (time.perf_counter() - start_drain) < grace_period_sec:
-        logger.info(f"Draining in-flight requests... ({server_state.active_request_count} remaining)")
+    while (
+        server_state.active_request_count > 0
+        and (time.perf_counter() - start_drain) < grace_period_sec
+    ):
+        logger.info(
+            f"Draining in-flight requests... ({server_state.active_request_count} remaining)"
+        )
         await asyncio.sleep(0.5)
 
     if server_state.active_request_count > 0:
-        logger.warning(f"Shutdown timeout reached. Forcefully terminating {server_state.active_request_count} requests.")
+        logger.warning(
+            f"Shutdown timeout reached. Forcefully terminating {server_state.active_request_count} requests."
+        )
     else:
         logger.info("All in-flight requests successfully drained.")
 
@@ -189,7 +210,9 @@ async def context_propagation_and_backpressure_middleware(request: Request, call
     if server_state.is_draining:
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            content={"error": "Server is shutting down and draining active connections."},
+            content={
+                "error": "Server is shutting down and draining active connections."
+            },
         )
 
     # Attach Request Correlation ID
@@ -201,7 +224,9 @@ async def context_propagation_and_backpressure_middleware(request: Request, call
         REQUEST_COUNTER.labels(endpoint=request.url.path, status_code="429").inc()
         return JSONResponse(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            content={"error": "Server capacity limit exceeded. High load backpressure triggered."},
+            content={
+                "error": "Server capacity limit exceeded. High load backpressure triggered."
+            },
         )
 
     server_state.active_request_count += 1
@@ -211,10 +236,12 @@ async def context_propagation_and_backpressure_middleware(request: Request, call
     try:
         response = await call_next(request)
         response.headers["X-Request-ID"] = request_id
-        
+
         duration = time.perf_counter() - start_time
         REQUEST_LATENCY.labels(endpoint=request.url.path).observe(duration)
-        REQUEST_COUNTER.labels(endpoint=request.url.path, status_code=str(response.status_code)).inc()
+        REQUEST_COUNTER.labels(
+            endpoint=request.url.path, status_code=str(response.status_code)
+        ).inc()
         return response
 
     finally:
@@ -226,17 +253,18 @@ async def context_propagation_and_backpressure_middleware(request: Request, call
 # Authentication Security Dependency
 # ============================================================================
 
-async def verify_api_key(authorization: Optional[str] = Header(None)) -> bool:
+
+async def verify_api_key(authorization: str | None = Header(None)) -> bool:
     """Validates Bearer API Key if configured in environment."""
     if server_state.api_key is None:
         return True  # Auth disabled
-    
+
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing or malformed Authorization Bearer header.",
         )
-    
+
     token = authorization.split("Bearer ")[1].strip()
     if token != server_state.api_key:
         raise HTTPException(
@@ -250,9 +278,10 @@ async def verify_api_key(authorization: Optional[str] = Header(None)) -> bool:
 # Simulated Core Generation Pipeline (Interface to RequestQueue/Scheduler)
 # ============================================================================
 
+
 async def mock_llm_stream_generator(
     prompt: str, max_tokens: int, request_id: str
-) -> AsyncGenerator[Dict[str, Any], None]:
+) -> AsyncGenerator[dict[str, Any], None]:
     """Simulates real-time token streaming from the pipeline scheduler engine."""
     start_time = time.perf_counter()
     ttft_recorded = False
@@ -272,7 +301,7 @@ async def mock_llm_stream_generator(
 
         # Decode token latency simulation
         await asyncio.sleep(0.01)
-        
+
         token_chunk = {
             "id": f"cmpl-{request_id}",
             "object": "text_completion",
@@ -292,6 +321,7 @@ async def mock_llm_stream_generator(
 # ============================================================================
 # Endpoints
 # ============================================================================
+
 
 @app.get("/health", status_code=status.HTTP_200_OK)
 async def health_check():
@@ -330,7 +360,9 @@ async def create_completion(
 
         async def sse_event_generator() -> AsyncGenerator[str, None]:
             try:
-                async for chunk in mock_llm_stream_generator(prompt_str, req.max_tokens, request_id):
+                async for chunk in mock_llm_stream_generator(
+                    prompt_str, req.max_tokens, request_id
+                ):
                     yield f"data: {json.dumps(chunk)}\n\n"
                 yield "data: [DONE]\n\n"
             finally:
@@ -347,9 +379,11 @@ async def create_completion(
         )
 
     # Non-streaming Response
-    start_time = time.perf_counter()
+    time.perf_counter()
     tokens = []
-    async for chunk in mock_llm_stream_generator(prompt_str, req.max_tokens, request_id):
+    async for chunk in mock_llm_stream_generator(
+        prompt_str, req.max_tokens, request_id
+    ):
         tokens.append(chunk["choices"][0]["text"])
 
     full_text = "".join(tokens)
@@ -382,7 +416,7 @@ async def create_chat_completion(
 ):
     """OpenAI-compatible chat completion endpoint supporting SSE streaming."""
     request_id = getattr(raw_request.state, "request_id", f"req-{uuid.uuid4().hex[:8]}")
-    
+
     # Flatten chat messages into a single prompt string
     formatted_prompt = "\n".join([f"{m.role}: {m.content}" for m in req.messages])
 
@@ -391,7 +425,9 @@ async def create_chat_completion(
 
         async def sse_chat_generator() -> AsyncGenerator[str, None]:
             try:
-                async for chunk in mock_llm_stream_generator(formatted_prompt, req.max_tokens, request_id):
+                async for chunk in mock_llm_stream_generator(
+                    formatted_prompt, req.max_tokens, request_id
+                ):
                     delta_text = chunk["choices"][0]["text"]
                     chat_chunk = {
                         "id": f"chatcmpl-{request_id}",
@@ -423,7 +459,9 @@ async def create_chat_completion(
 
     # Non-streaming response
     tokens = []
-    async for chunk in mock_llm_stream_generator(formatted_prompt, req.max_tokens, request_id):
+    async for chunk in mock_llm_stream_generator(
+        formatted_prompt, req.max_tokens, request_id
+    ):
         tokens.append(chunk["choices"][0]["text"])
 
     return {
@@ -454,7 +492,7 @@ if __name__ == "__main__":
 
     logging.basicConfig(level=logging.INFO)
     logger.info("Starting API Gateway Server on port 8000...")
-    
+
     uvicorn.run(
         app,
         host="0.0.0.0",

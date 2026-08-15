@@ -1,22 +1,26 @@
 """
 Unit Tests for Workload Distribution Fitting and VRAM Saturation Modeling
 """
+
 import numpy as np
 import pytest
+
 from nexuscache.analytics.workload_model import (
     ModelMemoryConfig,
-    SequenceDistributionParams,
     VRAMSaturationModel,
     WorkloadDistributionFitter,
     compute_rtx_3080_10gb_capacity,
 )
+
 
 class TestWorkloadModel:
 
     def test_fit_lognormal_distribution(self):
         """Verify Lognormal distribution fitting and percentile output."""
         np.random.seed(42)
-        sample_lengths = np.random.lognormal(mean=4.5, sigma=0.75, size=500).astype(int) + 1
+        sample_lengths = (
+            np.random.lognormal(mean=4.5, sigma=0.75, size=500).astype(int) + 1
+        )
 
         params = WorkloadDistributionFitter.fit_lognormal(sample_lengths)
 
@@ -48,8 +52,8 @@ class TestWorkloadModel:
             block_size=16,
             dtype_bytes=2,
         )
-        model = VRAMSaturationModel(config, total_gpu_vram_bytes=10 * (1024 ** 3))
-        
+        model = VRAMSaturationModel(config, total_gpu_vram_bytes=10 * (1024**3))
+
         expected_bytes = 2 * 16 * 8 * 64 * 16 * 2
         assert model.calculate_bytes_per_block() == expected_bytes
         assert expected_bytes == 524288  # Exact 512 KB
@@ -66,7 +70,7 @@ class TestWorkloadModel:
             model_weight_fp16_gb=4.5,
         )
 
-        assert metrics.total_gpu_vram_bytes == 10 * (1024 ** 3)
+        assert metrics.total_gpu_vram_bytes == 10 * (1024**3)
         assert metrics.usable_kv_vram_bytes > 0
         assert metrics.total_allocatable_blocks > 0
         assert metrics.max_active_sequences_p50 >= metrics.max_active_sequences_p95

@@ -6,10 +6,10 @@ Pushes GPU Compute Utilization >90% during high-concurrency request bursts.
 
 import logging
 import time
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass
 
 import torch
+
 import nexuscache._C as _C
 from nexuscache.server.scheduler import BatchOutput, Scheduler, Sequence
 
@@ -22,20 +22,27 @@ class CudaGraphRunner:
     Manages CUDA Graph recording and instantiation for fixed decode batch shapes.
     Eliminates C++/Python driver overhead and CPU launch latency for decode steps.
     """
+
     batch_size: int
     device: torch.device
-    graph: Optional[torch.cuda.CUDAGraph] = None
-    
+    graph: torch.cuda.CUDAGraph | None = None
+
     # Static placeholder tensors allocated in CUDA memory for Graph capture
-    input_ids: Optional[torch.Tensor] = None
-    slot_mapping: Optional[torch.Tensor] = None
-    logits_output: Optional[torch.Tensor] = None
+    input_ids: torch.Tensor | None = None
+    slot_mapping: torch.Tensor | None = None
+    logits_output: torch.Tensor | None = None
 
     def capture(self, model_forward_fn, max_seq_len: int = 2048) -> None:
         """Captures execution graph for a fixed decode batch size."""
-        self.input_ids = torch.zeros((self.batch_size, 1), dtype=torch.long, device=self.device)
-        self.slot_mapping = torch.zeros((self.batch_size,), dtype=torch.long, device=self.device)
-        self.logits_output = torch.zeros((self.batch_size, 32000), dtype=torch.float16, device=self.device)
+        self.input_ids = torch.zeros(
+            (self.batch_size, 1), dtype=torch.long, device=self.device
+        )
+        self.slot_mapping = torch.zeros(
+            (self.batch_size,), dtype=torch.long, device=self.device
+        )
+        self.logits_output = torch.zeros(
+            (self.batch_size, 32000), dtype=torch.float16, device=self.device
+        )
 
         # Warmup execution before graph capture
         s = torch.cuda.Stream(device=self.device)
@@ -49,23 +56,28 @@ class CudaGraphRunner:
         self.graph = torch.cuda.CUDAGraph()
         with torch.cuda.graph(self.graph, stream=s):
             self.logits_output = model_forward_fn(self.input_ids, self.slot_mapping)
-        
-        logger.info(f"[CudaGraphRunner] Captured CUDA Graph for decode batch size={self.batch_size}")
 
-    def replay(self, input_ids: torch.Tensor, slot_mapping: torch.Tensor) -> torch.Tensor:
+        logger.info(
+            f"[CudaGraphRunner] Captured CUDA Graph for decode batch size={self.batch_size}"
+        )
+
+    def replay(
+        self, input_ids: torch.Tensor, slot_mapping: torch.Tensor
+    ) -> torch.Tensor:
         """Replays graph with new input data copied into static placeholder memory."""
         if (
-            self.graph is None 
-            or self.input_ids is None 
-            or self.slot_mapping is None 
-            or self.logits_output is None  # <--- Type guard narrows logits_output to Tensor
+            self.graph is None
+            or self.input_ids is None
+            or self.slot_mapping is None
+            or self.logits_output
+            is None  # <--- Type guard narrows logits_output to Tensor
         ):
             raise RuntimeError("CUDA Graph is not captured!")
 
         # Async copy runtime inputs into pinned static graph buffers
         self.input_ids.copy_(input_ids, non_blocking=True)
         self.slot_mapping.copy_(slot_mapping, non_blocking=True)
-        
+
         # Replay recorded kernel execution sequence
         self.graph.replay()
         return self.logits_output
@@ -92,10 +104,12 @@ class AdaptiveBatchTuner:
         self._step_count = 0
         self._last_adjust_time = time.perf_counter()
 
-    def update_budget(self, current_batch_size: int, step_duration_ms: float, free_vram_ratio: float) -> int:
+    def update_budget(
+        self, current_batch_size: int, step_duration_ms: float, free_vram_ratio: float
+    ) -> int:
         """Calculates optimal token budget for subsequent scheduler iterations."""
         self._step_count += 1
-        
+
         # Adjust budget every 50 iteration steps
         if self._step_count % 50 != 0:
             return self.current_token_budget
@@ -103,18 +117,20 @@ class AdaptiveBatchTuner:
         # If GPU compute step finishes too fast and VRAM headroom is high -> scale UP budget
         if step_duration_ms < 5.0 and free_vram_ratio > 0.20:
             self.current_token_budget = min(
-                self.max_token_budget,
-                int(self.current_token_budget * 1.25)
+                self.max_token_budget, int(self.current_token_budget * 1.25)
             )
-            logger.debug(f"[AdaptiveBatchTuner] Scaled UP token budget to {self.current_token_budget}")
+            logger.debug(
+                f"[AdaptiveBatchTuner] Scaled UP token budget to {self.current_token_budget}"
+            )
 
         # If VRAM pressure is critical (<10% free) -> scale DOWN budget to stabilize latency
         elif free_vram_ratio < 0.10:
             self.current_token_budget = max(
-                self.min_token_budget,
-                int(self.current_token_budget * 0.80)
+                self.min_token_budget, int(self.current_token_budget * 0.80)
             )
-            logger.warning(f"[AdaptiveBatchTuner] VRAM pressure high! Scaled DOWN token budget to {self.current_token_budget}")
+            logger.warning(
+                f"[AdaptiveBatchTuner] VRAM pressure high! Scaled DOWN token budget to {self.current_token_budget}"
+            )
 
         return self.current_token_budget
 
@@ -149,7 +165,7 @@ class ExecutionPipelineManager:
         self.tuner = AdaptiveBatchTuner()
 
         # 4. CUDA Graph Runners mapped by decode batch size (Power-of-2 buckets)
-        self.cuda_graphs: Dict[int, CudaGraphRunner] = {}
+        self.cuda_graphs: dict[int, CudaGraphRunner] = {}
         self._graph_buckets = [1, 2, 4, 8, 16, 32, 64, 128, 256]
 
     def warmup_cuda_graphs(self, mock_model_fn) -> None:
@@ -157,7 +173,9 @@ class ExecutionPipelineManager:
         if not self.enable_cuda_graphs:
             return
 
-        logger.info("[PipelineManager] Pre-capturing CUDA Graphs for decode acceleration...")
+        logger.info(
+            "[PipelineManager] Pre-capturing CUDA Graphs for decode acceleration..."
+        )
         for bs in self._graph_buckets:
             runner = CudaGraphRunner(batch_size=bs, device=self.device)
             runner.capture(mock_model_fn)
@@ -168,7 +186,7 @@ class ExecutionPipelineManager:
         batch: BatchOutput,
         scheduler: Scheduler,
         mock_model_fn,
-    ) -> List[Tuple[Sequence, int]]:
+    ) -> list[tuple[Sequence, int]]:
         """
         Executes a single step with zero-copy async host/device staging and stream overlap.
         Returns generated token outputs mapped per sequence.
@@ -183,7 +201,7 @@ class ExecutionPipelineManager:
             all_seqs = batch.prefill_seqs + batch.decode_seqs
             seq_ids = [s.seq_id for s in all_seqs]
             query_lens = [
-                len(s.prompt_token_ids) if s in batch.prefill_seqs else 1 
+                len(s.prompt_token_ids) if s in batch.prefill_seqs else 1
                 for s in all_seqs
             ]
 
@@ -199,17 +217,27 @@ class ExecutionPipelineManager:
             for seq in batch.prefill_seqs:
                 flat_input_tokens.extend(seq.prompt_token_ids)
             for seq in batch.decode_seqs:
-                flat_input_tokens.append(seq.generated_token_ids[-1] if seq.generated_token_ids else seq.prompt_token_ids[-1])
+                flat_input_tokens.append(
+                    seq.generated_token_ids[-1]
+                    if seq.generated_token_ids
+                    else seq.prompt_token_ids[-1]
+                )
 
-            input_tensor = torch.tensor(flat_input_tokens, dtype=torch.long, device=self.device)
+            input_tensor = torch.tensor(
+                flat_input_tokens, dtype=torch.long, device=self.device
+            )
 
             # 2. Compute execution path (CUDA Graph Replay for Decode vs. Standard Forward for Prefill)
             num_decode = len(batch.decode_seqs)
-            is_decode_only = len(batch.prefill_seqs) == 0 and num_decode in self.cuda_graphs
+            is_decode_only = (
+                len(batch.prefill_seqs) == 0 and num_decode in self.cuda_graphs
+            )
 
             if is_decode_only and self.enable_cuda_graphs:
                 # Optimized Path: Replay captured CUDA graph (0 CPU overhead)
-                logits = self.cuda_graphs[num_decode].replay(input_tensor.unsqueeze(1), slot_mapping)
+                logits = self.cuda_graphs[num_decode].replay(
+                    input_tensor.unsqueeze(1), slot_mapping
+                )
             else:
                 # Standard Forward Path
                 logits = mock_model_fn(input_tensor, slot_mapping)
@@ -221,7 +249,7 @@ class ExecutionPipelineManager:
         self.compute_stream.synchronize()
 
         # 4. Map output tokens back to sequences and update state
-        results: List[Tuple[Sequence, int]] = []
+        results: list[tuple[Sequence, int]] = []
         for idx, seq in enumerate(all_seqs):
             token_id = next_tokens[idx] if idx < len(next_tokens) else 100
             seq.generated_token_ids.append(token_id)

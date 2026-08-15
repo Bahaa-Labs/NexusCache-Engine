@@ -2,10 +2,13 @@
 Tests prefill vs. decode phase separation, KV-cache capacity constraints,
 and preemption/eviction handling using PyTest fixtures.
 """
-import torch
+
 import pytest
+import torch
+
 import nexuscache._C as _C
 from nexuscache.server.scheduler import Scheduler, SchedulerConfig, SequenceState
+
 
 @pytest.fixture
 def allocator_config() -> _C.BlockAllocatorConfig:
@@ -43,11 +46,11 @@ def scheduler(cpp_subsystem, allocator_config: _C.BlockAllocatorConfig) -> Sched
 
 
 class TestContinuousScheduler:
-    
+
     def test_add_sequence_and_initial_state(self, scheduler: Scheduler):
         """Verify that adding sequences correctly populates waiting queues and sequence maps."""
         seq_id = scheduler.add_sequence("req_1", [101, 102, 103], max_new_tokens=5)
-        
+
         assert seq_id in scheduler.sequence_map
         assert len(scheduler.waiting_queue) == 1
         assert scheduler.sequence_map[seq_id].state == SequenceState.WAITING
@@ -56,7 +59,7 @@ class TestContinuousScheduler:
     def test_prefill_then_decode_transition(self, scheduler: Scheduler, cpp_subsystem):
         """Verify that a fresh sequence runs prefill in step 1 and transitions to decode in step 2."""
         _, page_table = cpp_subsystem
-        
+
         # Add 2 sequences requiring 2 blocks and 1 block respectively
         s1 = scheduler.add_sequence("req_1", [1, 2, 3, 4, 5], max_new_tokens=3)
         s2 = scheduler.add_sequence("req_2", [6, 7], max_new_tokens=2)
@@ -76,7 +79,9 @@ class TestContinuousScheduler:
         assert scheduler.sequence_map[s1].state == SequenceState.DECODE
         assert scheduler.sequence_map[s2].state == SequenceState.DECODE
 
-    def test_sequence_completion_cleans_up_cpp_memory(self, scheduler: Scheduler, cpp_subsystem):
+    def test_sequence_completion_cleans_up_cpp_memory(
+        self, scheduler: Scheduler, cpp_subsystem
+    ):
         """Verify that completed sequences free their C++ block allocations."""
         block_manager, page_table = cpp_subsystem
         initial_free_blocks = block_manager.get_num_free_blocks()
@@ -92,20 +97,22 @@ class TestContinuousScheduler:
 
         # Step 2: Decode -> Execution sees sequence finished and frees memory
         scheduler.schedule()
-        
+
         assert not page_table.has_sequence(s1)
         assert block_manager.get_num_free_blocks() == initial_free_blocks
         assert scheduler.get_num_unfinished_sequences() == 0
 
-    def test_kv_exhaustion_triggers_preemption(self, scheduler: Scheduler, cpp_subsystem):
+    def test_kv_exhaustion_triggers_preemption(
+        self, scheduler: Scheduler, cpp_subsystem
+    ):
         """Verify that running out of C++ free blocks triggers sequence preemption."""
         block_manager, page_table = cpp_subsystem
 
         # Populate scheduler to fill 7 out of 8 available blocks
         # Prompt len 16 requires 4 blocks (block_size=4)
-        s1 = scheduler.add_sequence("req_large_1", list(range(16)), max_new_tokens=10)
+        scheduler.add_sequence("req_large_1", list(range(16)), max_new_tokens=10)
         # Prompt len 12 requires 3 blocks
-        s2 = scheduler.add_sequence("req_large_2", list(range(12)), max_new_tokens=10)
+        scheduler.add_sequence("req_large_2", list(range(12)), max_new_tokens=10)
 
         # Step 1: Prefill both sequences (Total blocks consumed: 7/8)
         scheduler.schedule()
@@ -115,9 +122,9 @@ class TestContinuousScheduler:
         # s1 currently has 16 tokens (exactly 4 blocks full). Appending token 17 requires block #5.
         # s2 currently has 12 tokens (3 blocks full). Appending token 13 requires block #4.
         # Total needed: 2 new blocks, but only 1 free block exists!
-        
+
         batch = scheduler.schedule()
-        
+
         # One of the sequences must be preempted to accommodate the other
         assert len(batch.preempted_seqs) > 0 or len(scheduler.preempted_queue) > 0
         assert len(scheduler.running_queue) < 2

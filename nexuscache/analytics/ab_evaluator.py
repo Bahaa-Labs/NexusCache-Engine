@@ -8,12 +8,10 @@ Collects, aggregates, logs, and exports latency percentiles (TTFT, TPOT, P95, P9
 memory fragmentation metrics, and throughput across synthetic workloads.
 """
 
-from dataclasses import asdict, dataclass, field
-import json
 import logging
-import math
 import time
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from dataclasses import asdict, dataclass, field
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -24,14 +22,17 @@ logger = logging.getLogger("nexuscache.analytics.ab_evaluator")
 @dataclass
 class RequestBenchmarkSample:
     """Individual request lifecycle timing and trace metrics."""
+
     request_id: str
     prompt_tokens: int
     gen_tokens: int
     arrival_time_s: float
-    first_token_time_s: Optional[float] = None
-    completion_time_s: Optional[float] = None
-    inter_token_latencies_ms: List[float] = field(default_factory=list)
-    strategy_used: Literal["Strategy_A_Static", "Strategy_B_Paged"] = "Strategy_A_Static"
+    first_token_time_s: float | None = None
+    completion_time_s: float | None = None
+    inter_token_latencies_ms: list[float] = field(default_factory=list)
+    strategy_used: Literal["Strategy_A_Static", "Strategy_B_Paged"] = (
+        "Strategy_A_Static"
+    )
 
     @property
     def ttft_ms(self) -> float:
@@ -58,21 +59,22 @@ class RequestBenchmarkSample:
 @dataclass
 class StrategyMetricsResult:
     """Aggregated experimental results and percentile metrics for a strategy run."""
+
     strategy_name: str
     total_requests: int
     total_tokens_generated: int
     duration_seconds: float
     throughput_tokens_per_sec: float
-    
+
     # Latency Percentiles (ms)
     ttft_p50_ms: float
     ttft_p95_ms: float
     ttft_p99_ms: float
-    
+
     tpot_p50_ms: float
     tpot_p95_ms: float
     tpot_p99_ms: float
-    
+
     e2e_p50_ms: float
     e2e_p95_ms: float
     e2e_p99_ms: float
@@ -81,7 +83,7 @@ class StrategyMetricsResult:
     avg_vram_fragmentation_pct: float
     peak_concurrent_active_requests: int
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Converts result object to clean dict representation."""
         return asdict(self)
 
@@ -98,34 +100,38 @@ class StrategyASimulator:
         self.step_delay_ms = 15.0  # Base model execution step delay
 
     def execute_workload(
-        self, requests: List[RequestBenchmarkSample]
-    ) -> Tuple[List[RequestBenchmarkSample], float]:
+        self, requests: list[RequestBenchmarkSample]
+    ) -> tuple[list[RequestBenchmarkSample], float]:
         """Executes requests in rigid static batches."""
-        processed_samples: List[RequestBenchmarkSample] = []
+        processed_samples: list[RequestBenchmarkSample] = []
         start_sim_time = time.perf_counter()
-        
+
         # Group into static chunks
         for i in range(0, len(requests), self.batch_size):
             batch = requests[i : i + self.batch_size]
             max_prompt = max(req.prompt_tokens for req in batch)
             max_gen = max(req.gen_tokens for req in batch)
-            
+
             # Static batching waits for the slowest request in the batch
             batch_start = time.perf_counter()
-            
+
             for req in batch:
                 req.first_token_time_s = batch_start + (max_prompt * 0.002)
-                
+
                 # Simulate step-by-step token generation
                 latencies = []
                 for step in range(req.gen_tokens):
                     # Add artificial padding penalty cost
-                    padding_penalty = (self.max_seq_len - (req.prompt_tokens + step)) * 0.00001
+                    padding_penalty = (
+                        self.max_seq_len - (req.prompt_tokens + step)
+                    ) * 0.00001
                     step_latency = self.step_delay_ms + max(0.0, padding_penalty)
                     latencies.append(step_latency)
-                
+
                 req.inter_token_latencies_ms = latencies
-                req.completion_time_s = req.first_token_time_s + (max_gen * (self.step_delay_ms / 1000.0))
+                req.completion_time_s = req.first_token_time_s + (
+                    max_gen * (self.step_delay_ms / 1000.0)
+                )
                 req.strategy_used = "Strategy_A_Static"
                 processed_samples.append(req)
 
@@ -144,20 +150,23 @@ class StrategyBSimulator:
         self.step_delay_ms = step_delay_ms
 
     def execute_workload(
-        self, requests: List[RequestBenchmarkSample]
-    ) -> Tuple[List[RequestBenchmarkSample], float]:
+        self, requests: list[RequestBenchmarkSample]
+    ) -> tuple[list[RequestBenchmarkSample], float]:
         """Executes requests under dynamic continuous batching."""
-        processed_samples: List[RequestBenchmarkSample] = []
+        processed_samples: list[RequestBenchmarkSample] = []
         start_sim_time = time.perf_counter()
-        
+
         for req in requests:
             # Paged KV-Cache reduces memory waste and step latency
             req_start = time.perf_counter()
             req.first_token_time_s = req_start + (req.prompt_tokens * 0.0008)
-            
-            latencies = [self.step_delay_ms + float(np.random.normal(0, 0.5)) for _ in range(req.gen_tokens)]
-            req.inter_token_latencies_ms = [max(1.0, l) for l in latencies]
-            
+
+            latencies = [
+                self.step_delay_ms + float(np.random.normal(0, 0.5))
+                for _ in range(req.gen_tokens)
+            ]
+            req.inter_token_latencies_ms = [max(1.0, lat) for lat in latencies]
+
             total_gen_time = sum(req.inter_token_latencies_ms) / 1000.0
             req.completion_time_s = req.first_token_time_s + total_gen_time
             req.strategy_used = "Strategy_B_Paged"
@@ -173,7 +182,7 @@ class ABEvaluatorHarness:
     """
 
     @staticmethod
-    def _compute_percentiles(values: List[float]) -> Tuple[float, float, float]:
+    def _compute_percentiles(values: list[float]) -> tuple[float, float, float]:
         """Calculates p50, p95, and p99 from a list of values."""
         if not values:
             return 0.0, 0.0, 0.0
@@ -185,7 +194,7 @@ class ABEvaluatorHarness:
     def aggregate_metrics(
         cls,
         strategy_name: str,
-        samples: List[RequestBenchmarkSample],
+        samples: list[RequestBenchmarkSample],
         duration_s: float,
         fragmentation_pct: float = 0.0,
     ) -> StrategyMetricsResult:
@@ -223,15 +232,17 @@ class ABEvaluatorHarness:
     def run_ab_experiment(
         self,
         num_requests: int = 100,
-        prompt_range: Tuple[int, int] = (64, 512),
-        gen_range: Tuple[int, int] = (16, 128),
-        seed: int = 42
-    ) -> Dict[str, StrategyMetricsResult]:
+        prompt_range: tuple[int, int] = (64, 512),
+        gen_range: tuple[int, int] = (16, 128),
+        seed: int = 42,
+    ) -> dict[str, StrategyMetricsResult]:
         """Generates synthetic workload and executes A/B comparison across Strategy A and B."""
-        logger.info(f"Starting A/B evaluation benchmark with {num_requests} requests...")
+        logger.info(
+            f"Starting A/B evaluation benchmark with {num_requests} requests..."
+        )
         np.random.seed(seed)
 
-        base_samples: List[RequestBenchmarkSample] = []
+        base_samples: list[RequestBenchmarkSample] = []
         now = time.perf_counter()
 
         for i in range(num_requests):
@@ -248,13 +259,21 @@ class ABEvaluatorHarness:
 
         # 1. Run Strategy A (Static + Contiguous)
         sim_a = StrategyASimulator()
-        samples_a, dur_a = sim_a.execute_workload([RequestBenchmarkSample(**asdict(s)) for s in base_samples])
-        res_a = self.aggregate_metrics("Strategy_A_Static", samples_a, dur_a, fragmentation_pct=42.5)
+        samples_a, dur_a = sim_a.execute_workload(
+            [RequestBenchmarkSample(**asdict(s)) for s in base_samples]
+        )
+        res_a = self.aggregate_metrics(
+            "Strategy_A_Static", samples_a, dur_a, fragmentation_pct=42.5
+        )
 
         # 2. Run Strategy B (Continuous + Paged KV)
         sim_b = StrategyBSimulator()
-        samples_b, dur_b = sim_b.execute_workload([RequestBenchmarkSample(**asdict(s)) for s in base_samples])
-        res_b = self.aggregate_metrics("Strategy_B_Paged", samples_b, dur_b, fragmentation_pct=4.2)
+        samples_b, dur_b = sim_b.execute_workload(
+            [RequestBenchmarkSample(**asdict(s)) for s in base_samples]
+        )
+        res_b = self.aggregate_metrics(
+            "Strategy_B_Paged", samples_b, dur_b, fragmentation_pct=4.2
+        )
 
         return {"Strategy_A": res_a, "Strategy_B": res_b}
 
@@ -265,14 +284,14 @@ if __name__ == "__main__":
     results = harness.run_ab_experiment(num_requests=100)
 
     df = pd.DataFrame([res.to_dict() for res in results.values()])
-    
+
     print("\n=== A/B Evaluation Results Summary ===")
     selected_cols = [
-        "strategy_name", 
-        "throughput_tokens_per_sec", 
-        "ttft_p50_ms", 
-        "ttft_p99_ms", 
-        "tpot_p50_ms", 
-        "avg_vram_fragmentation_pct"
+        "strategy_name",
+        "throughput_tokens_per_sec",
+        "ttft_p50_ms",
+        "ttft_p99_ms",
+        "tpot_p50_ms",
+        "avg_vram_fragmentation_pct",
     ]
     print(df[selected_cols].to_string(index=False))

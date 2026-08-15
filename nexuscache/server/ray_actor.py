@@ -12,7 +12,7 @@ Features:
 import asyncio
 import logging
 import time
-from typing import Any, Dict, List, Optional, Tuple, cast
+from typing import Any, cast
 
 import ray
 from ray.actor import ActorHandle
@@ -27,7 +27,7 @@ class ModelWorkerActor:
     Ray Actor wrapping a localized model execution worker (e.g., KV-Cache engine, C++ bindings).
     """
 
-    def __init__(self, worker_id: int, worker_config: Dict[str, Any]):
+    def __init__(self, worker_id: int, worker_config: dict[str, Any]):
         self.worker_id = worker_id
         self.config = worker_config
         self.is_initialized = False
@@ -38,15 +38,21 @@ class ModelWorkerActor:
     def _initialize_engine(self) -> None:
         """Initializes low-level execution contexts or hardware resources."""
         try:
-            logger.info(f"[ModelWorkerActor-{self.worker_id}] Initializing execution engine...")
+            logger.info(
+                f"[ModelWorkerActor-{self.worker_id}] Initializing execution engine..."
+            )
             # Example: Initialize GPU context, C++ bindings, or model weights here
             self.is_initialized = True
-            logger.info(f"[ModelWorkerActor-{self.worker_id}] Successfully initialized.")
+            logger.info(
+                f"[ModelWorkerActor-{self.worker_id}] Successfully initialized."
+            )
         except Exception as e:
-            logger.error(f"[ModelWorkerActor-{self.worker_id}] Initialization failed: {e}")
+            logger.error(
+                f"[ModelWorkerActor-{self.worker_id}] Initialization failed: {e}"
+            )
             raise e
 
-    def ping(self) -> Dict[str, Any]:
+    def ping(self) -> dict[str, Any]:
         """Health check endpoint returning worker telemetry and status."""
         self._last_heartbeat = time.time()
         return {
@@ -55,17 +61,21 @@ class ModelWorkerActor:
             "timestamp": self._last_heartbeat,
         }
 
-    def execute_command(self, command: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def execute_command(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
         """Executes a distributed scheduling command or model forward pass."""
         if not self.is_initialized:
             raise RuntimeError(f"Worker {self.worker_id} is not initialized.")
 
-        logger.debug(f"[ModelWorkerActor-{self.worker_id}] Executing command: {command}")
+        logger.debug(
+            f"[ModelWorkerActor-{self.worker_id}] Executing command: {command}"
+        )
         return {"status": "SUCCESS", "worker_id": self.worker_id, "result": None}
 
-    def update_state(self, state_update: Dict[str, Any]) -> bool:
+    def update_state(self, state_update: dict[str, Any]) -> bool:
         """Propagates distributed state sync updates to the worker."""
-        logger.info(f"[ModelWorkerActor-{self.worker_id}] Synchronizing distributed state...")
+        logger.info(
+            f"[ModelWorkerActor-{self.worker_id}] Synchronizing distributed state..."
+        )
         return True
 
 
@@ -78,7 +88,7 @@ class RayWorkerPool:
     def __init__(
         self,
         num_workers: int,
-        worker_config: Dict[str, Any],
+        worker_config: dict[str, Any],
         heartbeat_interval_s: float = 5.0,
         actor_max_restarts: int = 3,
     ):
@@ -87,9 +97,9 @@ class RayWorkerPool:
         self.heartbeat_interval_s = heartbeat_interval_s
         self.actor_max_restarts = actor_max_restarts
 
-        self.actors: List[ActorHandle] = []
-        self._restart_counts: Dict[int, int] = {}
-        self._monitor_task: Optional[asyncio.Task] = None
+        self.actors: list[ActorHandle] = []
+        self._restart_counts: dict[int, int] = {}
+        self._monitor_task: asyncio.Task | None = None
         self._is_running = False
 
     async def start(self) -> None:
@@ -100,10 +110,10 @@ class RayWorkerPool:
             actor = ModelWorkerActor.options(
                 num_gpus=self.worker_config.get("num_gpus_per_worker", 1),
                 max_restarts=self.actor_max_restarts,
-            max_task_retries=2,
+                max_task_retries=2,
             ).remote(worker_id=i, worker_config=self.worker_config)
 
-            self.actors.append(cast(ActorHandle, actor)) # <--- Add cast here
+            self.actors.append(cast(ActorHandle, actor))  # <--- Add cast here
             self._restart_counts[i] = 0
 
         self._is_running = True
@@ -129,12 +139,16 @@ class RayWorkerPool:
         self.actors.clear()
         logger.info("[RayWorkerPool] Actor pool successfully stopped.")
 
-    async def broadcast_command(self, command: str, payload: Dict[str, Any]) -> List[Any]:
+    async def broadcast_command(
+        self, command: str, payload: dict[str, Any]
+    ) -> list[Any]:
         """Broadcasts a command across all active worker actors concurrently."""
         if not self.actors:
             return []
 
-        object_refs = [actor.execute_command.remote(command, payload) for actor in self.actors]
+        object_refs = [
+            actor.execute_command.remote(command, payload) for actor in self.actors
+        ]
         try:
             # Offload ray.get to a thread pool so the asyncio event loop remains non-blocking
             return await asyncio.to_thread(ray.get, object_refs)
@@ -142,7 +156,7 @@ class RayWorkerPool:
             logger.error(f"[RayWorkerPool] Error during command broadcast: {e}")
             raise e
 
-    async def sync_state(self, state_update: Dict[str, Any]) -> None:
+    async def sync_state(self, state_update: dict[str, Any]) -> None:
         """Synchronizes engine states across all Ray workers."""
         if not self.actors:
             return
@@ -151,7 +165,9 @@ class RayWorkerPool:
         object_refs = [actor.update_state.remote(state_update) for actor in self.actors]
         await asyncio.to_thread(ray.get, object_refs)
 
-    async def _check_single_worker_health(self, idx: int, actor: ActorHandle) -> Tuple[int, bool]:
+    async def _check_single_worker_health(
+        self, idx: int, actor: ActorHandle
+    ) -> tuple[int, bool]:
         """Pings an individual actor with a strict timeout."""
         try:
             future = actor.ping.remote()
@@ -206,6 +222,8 @@ class RayWorkerPool:
             ).remote(worker_id=worker_id, worker_config=self.worker_config)
 
             self.actors[worker_id] = cast(ActorHandle, new_actor)
-            logger.info(f"[RayWorkerPool] Successfully recovered and respawned worker {worker_id}.")
+            logger.info(
+                f"[RayWorkerPool] Successfully recovered and respawned worker {worker_id}."
+            )
         except Exception as e:
             logger.error(f"[RayWorkerPool] Failed to recover worker {worker_id}: {e}")

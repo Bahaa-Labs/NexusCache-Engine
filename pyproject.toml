@@ -90,9 +90,12 @@ packages = ["nexuscache"]
 [tool.setuptools.package-data]
 nexuscache = ["*.so", "*.pyd", "_C*.so"]
 
+# Updated Ruff Configuration
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+
+[tool.ruff.lint]
 select = [
     "E",   # pycodestyle errors
     "W",   # pycodestyle warnings
@@ -107,16 +110,8 @@ ignore = [
     "B008", # Function call in argument defaults (required for FastAPI Depends)
 ]
 
-[tool.ruff.isort]
+[tool.ruff.lint.isort]
 known-first-party = ["nexuscache"]
-
-[tool.ruff.lint]
-ignore = [
-    "I",     
-    "UP",   
-    "E501",
-    "B008",
-]
 
 # Pytest Configuration
 [tool.pytest.ini_options]
@@ -147,7 +142,7 @@ module = [
 ]
 ignore_missing_imports = true
 
-#Coverage.py Configuration
+# Coverage.py Configuration
 [tool.coverage.run]
 source = ["nexuscache"]
 omit = [

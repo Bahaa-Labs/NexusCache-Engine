@@ -2,15 +2,16 @@
 High-throughput asynchronous Ray Actor bound to dedicated GPU resources.
 Integrates PyTorch CUDA execution streams with C++ BlockManager/PageTable core memory engine.
 """
+
 import asyncio
 import logging
 import time
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import AsyncGenerator, Dict, List, Optional, Tuple
 
-import torch
 import ray
+import torch
 
 # Native C++ extension imported from build
 import nexuscache._C as _C
@@ -29,13 +30,13 @@ class RequestStatus(Enum):
 class SequenceRequest:
     # Internal state wrapper for an incoming inference generation sequence.
     request_id: str
-    prompt_token_ids: List[int]
+    prompt_token_ids: list[int]
     max_new_tokens: int
     temperature: float = 1.0
     top_p: float = 1.0
-    
+
     # Dynamic runtime tracking
-    generated_token_ids: List[int] = field(default_factory=list)
+    generated_token_ids: list[int] = field(default_factory=list)
     status: RequestStatus = RequestStatus.WAITING
     arrival_time: float = field(default_factory=time.perf_counter)
     output_queue: asyncio.Queue = field(default_factory=asyncio.Queue)
@@ -93,35 +94,39 @@ class InferenceWorker:
         self.cuda_stream = torch.cuda.Stream(device=self.device)
 
         # Instantiate C++ Native Subsystems locally
-        logger.info(f"[Worker {self.worker_id}] Initializing C++ Memory Subsystem on {self.device}...")
+        logger.info(
+            f"[Worker {self.worker_id}] Initializing C++ Memory Subsystem on {self.device}..."
+        )
         self.block_manager = _C.BlockManager(self.config)
         self.page_table = _C.PageTable(self.block_manager, self.config.block_size)
         self.async_transfer = _C.AsyncTransferManager(self.device_id)
 
         # Async request queues & state tracking
-        self.request_pool: Dict[str, SequenceRequest] = {}
+        self.request_pool: dict[str, SequenceRequest] = {}
         self.waiting_queue: asyncio.Queue[SequenceRequest] = asyncio.Queue()
-        self.active_requests: List[SequenceRequest] = []
-        
+        self.active_requests: list[SequenceRequest] = []
+
         # Actor control loop flag
         self._is_running = False
-        self._loop_task: Optional[asyncio.Task] = None
+        self._loop_task: asyncio.Task | None = None
 
     async def initialize(self) -> bool:
         """Warms up the CUDA context and starts the background step execution loop."""
         with torch.cuda.stream(self.cuda_stream):
             # Pre-allocate dummy tensor to force PyTorch CUDA context instantiation
             _ = torch.empty((1,), device=self.device)
-            
+
         self._is_running = True
         self._loop_task = asyncio.create_task(self._continuous_batch_loop())
-        logger.info(f"[Worker {self.worker_id}] Continuous batch loop started successfully.")
+        logger.info(
+            f"[Worker {self.worker_id}] Continuous batch loop started successfully."
+        )
         return True
 
     async def generate_stream(
         self,
         request_id: str,
-        prompt_token_ids: List[int],
+        prompt_token_ids: list[int],
         max_new_tokens: int,
         temperature: float = 1.0,
         top_p: float = 1.0,
@@ -141,7 +146,10 @@ class InferenceWorker:
         await self.waiting_queue.put(req)
 
         try:
-            while req.status != RequestStatus.FINISHED and req.status != RequestStatus.FAILED:
+            while (
+                req.status != RequestStatus.FINISHED
+                and req.status != RequestStatus.FAILED
+            ):
                 token_id = await req.output_queue.get()
                 if token_id is None:  # EOS or completion signal
                     break
@@ -159,13 +167,19 @@ class InferenceWorker:
                 # 1. Promote waiting requests if free KV blocks are available
                 while not self.waiting_queue.empty():
                     req = self.waiting_queue.get_nowait()
-                    num_prompt_blocks = (len(req.prompt_token_ids) + self.config.block_size - 1) // self.config.block_size
-                    
+                    num_prompt_blocks = (
+                        len(req.prompt_token_ids) + self.config.block_size - 1
+                    ) // self.config.block_size
+
                     if self.block_manager.get_num_free_blocks() >= num_prompt_blocks:
-                        seq_id = int(req.request_id, 16) if req.request_id.isdigit() else hash(req.request_id) % (2**31)
+                        seq_id = (
+                            int(req.request_id, 16)
+                            if req.request_id.isdigit()
+                            else hash(req.request_id) % (2**31)
+                        )
                         self.page_table.register_sequence(seq_id)
                         self.page_table.append_tokens(seq_id, len(req.prompt_token_ids))
-                        
+
                         req.status = RequestStatus.RUNNING
                         self.active_requests.append(req)
                     else:
@@ -174,14 +188,18 @@ class InferenceWorker:
                         break
 
                 if not self.active_requests:
-                    await asyncio.sleep(0.001)  # Yield CPU to avoid tight busy-wait loop
+                    await asyncio.sleep(
+                        0.001
+                    )  # Yield CPU to avoid tight busy-wait loop
                     continue
 
                 # 2. Execute forward step asynchronously on CUDA stream
                 await self._execute_step()
 
             except Exception as e:
-                logger.error(f"[Worker {self.worker_id}] Error in batch loop: {e}", exc_info=True)
+                logger.error(
+                    f"[Worker {self.worker_id}] Error in batch loop: {e}", exc_info=True
+                )
                 await asyncio.sleep(0.01)
 
     async def _execute_step(self) -> None:
@@ -189,27 +207,42 @@ class InferenceWorker:
         with torch.cuda.stream(self.cuda_stream):
             # Extract sequence IDs for slot mapping tensor construct
             active_seq_ids = [
-                int(req.request_id, 16) if req.request_id.isdigit() else hash(req.request_id) % (2**31)
+                (
+                    int(req.request_id, 16)
+                    if req.request_id.isdigit()
+                    else hash(req.request_id) % (2**31)
+                )
                 for req in self.active_requests
             ]
-            query_lens = [1 if req.generated_token_ids else len(req.prompt_token_ids) for req in self.active_requests]
+            query_lens = [
+                1 if req.generated_token_ids else len(req.prompt_token_ids)
+                for req in self.active_requests
+            ]
 
             # Native C++ call: Generate block table & slot mapping CUDA tensors
-            slot_mapping = self.page_table.get_slot_mapping_tensor(active_seq_ids, query_lens, device="cuda")
-            
-            # SIMULATED FORWARD PASS & SAMPLING 
+            self.page_table.get_slot_mapping_tensor(
+                active_seq_ids, query_lens, device="cuda"
+            )
+
+            # SIMULATED FORWARD PASS & SAMPLING
             # Replace with model.forward(inputs, slot_mapping) in Phase 4
             await asyncio.sleep(0.002)  # Non-blocking async compute yield
-            
-            finished_requests: List[SequenceRequest] = []
+
+            finished_requests: list[SequenceRequest] = []
 
             for req in self.active_requests:
                 # Mock token generation (e.g. echo increment or sample)
-                next_token = (req.prompt_token_ids[0] + len(req.generated_token_ids) + 1) % 32000
+                next_token = (
+                    req.prompt_token_ids[0] + len(req.generated_token_ids) + 1
+                ) % 32000
                 req.generated_token_ids.append(next_token)
 
                 # Append newly generated token to C++ page table
-                seq_id = int(req.request_id, 16) if req.request_id.isdigit() else hash(req.request_id) % (2**31)
+                seq_id = (
+                    int(req.request_id, 16)
+                    if req.request_id.isdigit()
+                    else hash(req.request_id) % (2**31)
+                )
                 self.page_table.append_tokens(seq_id, 1)
 
                 # Push generated token to stream queue
@@ -226,13 +259,19 @@ class InferenceWorker:
                 self.active_requests.remove(req)
 
     async def _free_request(self, request_id: str) -> None:
-        #Reclaims C++ block allocations and frees tracking context.
+        # Reclaims C++ block allocations and frees tracking context.
         req = self.request_pool.pop(request_id, None)
         if req:
-            seq_id = int(request_id, 16) if request_id.isdigit() else hash(request_id) % (2**31)
+            seq_id = (
+                int(request_id, 16)
+                if request_id.isdigit()
+                else hash(request_id) % (2**31)
+            )
             if self.page_table.has_sequence(seq_id):
                 self.page_table.free_sequence(seq_id)
-            logger.debug(f"[Worker {self.worker_id}] Reclaimed KV allocations for req {request_id}")
+            logger.debug(
+                f"[Worker {self.worker_id}] Reclaimed KV allocations for req {request_id}"
+            )
 
     async def get_stats(self) -> WorkerStats:
         # Fetches telemetry snapshot of VRAM usage and memory block allocations.

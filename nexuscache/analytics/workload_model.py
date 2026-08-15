@@ -6,9 +6,9 @@ computing deterministic VRAM consumption formulas, and calculating hardware satu
 capacity bounds on VRAM-constrained GPUs (e.g., RTX 3080 10GB).
 """
 
-from dataclasses import dataclass, field
 import logging
-from typing import Dict, List, Literal, Optional, Tuple, Union
+from dataclasses import dataclass
+from typing import Literal
 
 import numpy as np
 from scipy import stats
@@ -19,8 +19,9 @@ logger = logging.getLogger("nexuscache.analytics.workload")
 @dataclass
 class SequenceDistributionParams:
     """Fitted parametric distribution parameters for sequence lengths."""
+
     dist_type: Literal["lognormal", "poisson", "gamma", "weibull"]
-    params: Dict[str, float]
+    params: dict[str, float]
     mean: float
     std: float
     p50: float
@@ -31,17 +32,20 @@ class SequenceDistributionParams:
 @dataclass
 class ModelMemoryConfig:
     """Architecture memory parameters for LLM models and GPU hardware bounds."""
+
     num_layers: int = 32
     num_heads: int = 32
-    num_kv_heads: Optional[int] = None  # Supports Grouped-Query Attention (GQA)
+    num_kv_heads: int | None = None  # Supports Grouped-Query Attention (GQA)
     head_dim: int = 128
     block_size: int = 16
     dtype_bytes: int = 2  # float16/bfloat16 = 2 bytes, fp8 = 1 byte
-    
+
     # Model Weights & CUDA Overhead
-    model_weights_bytes: int = 14 * (1024 ** 3)  # e.g., 7B parameters in FP16 = 14GB
-    cuda_context_overhead_bytes: int = 600 * (1024 ** 2)  # ~600MB CUDA context overhead
-    activation_workspace_bytes: int = 512 * (1024 ** 2)   # ~512MB activation/cublas workspace
+    model_weights_bytes: int = 14 * (1024**3)  # e.g., 7B parameters in FP16 = 14GB
+    cuda_context_overhead_bytes: int = 600 * (1024**2)  # ~600MB CUDA context overhead
+    activation_workspace_bytes: int = 512 * (
+        1024**2
+    )  # ~512MB activation/cublas workspace
 
     def __post_init__(self):
         if self.num_kv_heads is None:
@@ -51,6 +55,7 @@ class ModelMemoryConfig:
 @dataclass
 class VRAMSaturationMetrics:
     """Quantitative snapshot of VRAM allocation breakdown and capacity limits."""
+
     total_gpu_vram_bytes: int
     model_weights_bytes: int
     fixed_overhead_bytes: int
@@ -67,7 +72,7 @@ class WorkloadDistributionFitter:
     """Fits empirical sequence length data to statistical parametric distributions."""
 
     @staticmethod
-    def fit_lognormal(lengths: Union[List[int], np.ndarray]) -> SequenceDistributionParams:
+    def fit_lognormal(lengths: list[int] | np.ndarray) -> SequenceDistributionParams:
         """Fits a Lognormal distribution to empirical token sequence lengths."""
         data = np.asarray(lengths, dtype=np.float64)
         data = data[data > 0]  # Filter non-positive values
@@ -79,11 +84,15 @@ class WorkloadDistributionFitter:
         scale = float(fit_res[2])
 
         # Use .item() to convert 0D NumPy arrays returned by SciPy into native Python floats
-        mean_val = np.asarray(stats.lognorm.mean(s, loc, scale), dtype=np.float64).item()
+        mean_val = np.asarray(
+            stats.lognorm.mean(s, loc, scale), dtype=np.float64
+        ).item()
         std_val = np.asarray(stats.lognorm.std(s, loc, scale), dtype=np.float64).item()
 
         # Extract percentiles as scalar floats
-        ppf_res = np.asarray(stats.lognorm.ppf([0.50, 0.95, 0.99], s, loc, scale), dtype=np.float64)
+        ppf_res = np.asarray(
+            stats.lognorm.ppf([0.50, 0.95, 0.99], s, loc, scale), dtype=np.float64
+        )
         p50 = float(ppf_res[0])
         p95 = float(ppf_res[1])
         p99 = float(ppf_res[2])
@@ -99,7 +108,7 @@ class WorkloadDistributionFitter:
         )
 
     @staticmethod
-    def fit_poisson(lengths: Union[List[int], np.ndarray]) -> SequenceDistributionParams:
+    def fit_poisson(lengths: list[int] | np.ndarray) -> SequenceDistributionParams:
         """Fits a Poisson distribution to sequence length data."""
         data = np.asarray(lengths, dtype=np.float64)
         mu = float(np.mean(data))
@@ -119,7 +128,9 @@ class WorkloadDistributionFitter:
         )
 
     @staticmethod
-    def sample_distribution(params: SequenceDistributionParams, num_samples: int = 1000) -> np.ndarray:
+    def sample_distribution(
+        params: SequenceDistributionParams, num_samples: int = 1000
+    ) -> np.ndarray:
         """Generates synthetic sequence length samples from fitted parameters."""
         if params.dist_type == "lognormal":
             samples = stats.lognorm.rvs(
@@ -152,12 +163,16 @@ class VRAMSaturationModel:
     def calculate_bytes_per_block(self) -> int:
         """
         Calculates exact memory footprint for a single physical KV-Cache block.
-        
+
         Formula:
             V_block = 2 * N_layers * N_kv_heads * D_head * S_block * sizeof(dtype)
         """
         # Narrow Optional[int] to int for Pyright static analysis
-        num_kv_heads = self.config.num_kv_heads if self.config.num_kv_heads is not None else self.config.num_heads
+        num_kv_heads = (
+            self.config.num_kv_heads
+            if self.config.num_kv_heads is not None
+            else self.config.num_heads
+        )
 
         # Multiply by 2 for separate Key and Value caches
         return (
@@ -215,7 +230,9 @@ class VRAMSaturationModel:
         max_p95 = max_seqs_for_len(prompt_dist.p95 + gen_dist.p95)
         max_p99 = max_seqs_for_len(prompt_dist.p99 + gen_dist.p99)
 
-        kv_efficiency = (total_blocks * bytes_per_block) / float(self.total_gpu_vram_bytes) * 100.0
+        kv_efficiency = (
+            (total_blocks * bytes_per_block) / float(self.total_gpu_vram_bytes) * 100.0
+        )
 
         return VRAMSaturationMetrics(
             total_gpu_vram_bytes=self.total_gpu_vram_bytes,
@@ -232,14 +249,14 @@ class VRAMSaturationModel:
 
 
 def compute_rtx_3080_10gb_capacity(
-    prompt_lengths: List[int],
-    gen_lengths: List[int],
+    prompt_lengths: list[int],
+    gen_lengths: list[int],
     model_weight_fp16_gb: float = 6.0,  # e.g., Quantized / Small model fitting 10GB VRAM
 ) -> VRAMSaturationMetrics:
     """
     Convenience helper computing batch capacity bounds specifically for NVIDIA RTX 3080 10GB.
     """
-    RTX_3080_VRAM_BYTES = 10 * (1024 ** 3)  # 10 GB
+    RTX_3080_VRAM_BYTES = 10 * (1024**3)  # 10 GB
 
     # Fit sequence distributions
     p_dist = WorkloadDistributionFitter.fit_lognormal(prompt_lengths)
@@ -253,10 +270,12 @@ def compute_rtx_3080_10gb_capacity(
         head_dim=64,
         block_size=16,
         dtype_bytes=2,
-        model_weights_bytes=int(model_weight_fp16_gb * (1024 ** 3)),
-        cuda_context_overhead_bytes=500 * (1024 ** 2),
-        activation_workspace_bytes=300 * (1024 ** 2),
+        model_weights_bytes=int(model_weight_fp16_gb * (1024**3)),
+        cuda_context_overhead_bytes=500 * (1024**2),
+        activation_workspace_bytes=300 * (1024**2),
     )
 
-    saturation_model = VRAMSaturationModel(config, total_gpu_vram_bytes=RTX_3080_VRAM_BYTES)
+    saturation_model = VRAMSaturationModel(
+        config, total_gpu_vram_bytes=RTX_3080_VRAM_BYTES
+    )
     return saturation_model.compute_saturation_limits(p_dist, g_dist)

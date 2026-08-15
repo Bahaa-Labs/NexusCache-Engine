@@ -1,26 +1,16 @@
 """
 Static vs. Dynamic Iteration Scheduler Benchmark Harness.
 
-Compares standard continuous batching (Static Baseline) against SLA-aware 
+Compares standard continuous batching (Static Baseline) against SLA-aware
 scheduling with prefix caching and smart victim preemption (Dynamic Scheduler).
 """
 
 import argparse
-from dataclasses import asdict, dataclass, field
 import json
 import math
 import random
-import time
-from typing import Dict, List, Optional, Tuple, Union
+from dataclasses import dataclass, field
 
-# Import Scheduler primitives
-from nexuscache.server.scheduler import (
-    BatchOutput,
-    Scheduler,
-    SchedulerConfig,
-    Sequence,
-    SequenceState,
-)
 from nexuscache.server.dynamic_scheduler import (
     DynamicScheduler,
     DynamicSchedulerConfig,
@@ -28,11 +18,19 @@ from nexuscache.server.dynamic_scheduler import (
     PriorityLevel,
 )
 
+# Import Scheduler primitives
+from nexuscache.server.scheduler import (
+    BatchOutput,
+    Scheduler,
+    SchedulerConfig,
+)
+
 # Optional rich formatting for CLI results
 try:
     from rich.console import Console
     from rich.panel import Panel
     from rich.table import Table
+
     HAS_RICH = True
 except ImportError:
     HAS_RICH = False
@@ -42,8 +40,10 @@ except ImportError:
 # Memory Subsystem Fallback / C++ Interface Layer
 # ============================================================================
 
+
 class FallbackBlockManager:
     """Python fallback for C++ BlockManager when native binary is absent."""
+
     def __init__(self, num_blocks: int, block_size: int = 16):
         self.total_blocks = num_blocks
         self.free_blocks = num_blocks
@@ -64,9 +64,10 @@ class FallbackBlockManager:
 
 class FallbackPageTable:
     """Python fallback for C++ PageTable when native binary is absent."""
+
     def __init__(self, block_size: int):
         self.block_size = block_size
-        self.active_sequences: Dict[int, List[int]] = {}
+        self.active_sequences: dict[int, list[int]] = {}
         self._next_block_id = 1000
 
     def register_sequence(self, seq_id: int) -> None:
@@ -85,11 +86,11 @@ class FallbackPageTable:
     def has_sequence(self, seq_id: int) -> bool:
         return seq_id in self.active_sequences
 
-    def free_sequence(self, seq_id: int) -> Tuple[int, List[int]]:
+    def free_sequence(self, seq_id: int) -> tuple[int, list[int]]:
         blocks = self.active_sequences.pop(seq_id, [])
         return len(blocks), blocks
 
-    def get_block_table(self, seq_id: int) -> List[int]:
+    def get_block_table(self, seq_id: int) -> list[int]:
         return self.active_sequences.get(seq_id, [])
 
 
@@ -97,24 +98,27 @@ def create_memory_subsystem(num_blocks: int, block_size: int):
     """Instantiates C++ BlockManager/PageTable or falls back to Python stubs."""
     try:
         import nexuscache._C as _C
-        
+
         config = _C.BlockAllocatorConfig()
         config.num_blocks = num_blocks
         config.block_size = block_size
-        
+
         return _C.BlockManager(config), _C.PageTable(block_size)
     except (ImportError, AttributeError, TypeError):
-        return FallbackBlockManager(num_blocks, block_size), FallbackPageTable(block_size)
+        return FallbackBlockManager(num_blocks, block_size), FallbackPageTable(
+            block_size
+        )
 
 
 # ============================================================================
 # Workload & Metrics Data Structures
 # ============================================================================
 
+
 @dataclass
 class SyntheticRequest:
     request_id: str
-    prompt_token_ids: List[int]
+    prompt_token_ids: list[int]
     max_new_tokens: int
     arrival_time: float
     priority: PriorityLevel = PriorityLevel.NORMAL
@@ -129,13 +133,13 @@ class BenchmarkMetrics:
     total_execution_steps: int = 0
     total_generated_tokens: int = 0
     simulation_duration_sec: float = 0.0
-    ttft_ms: List[float] = field(default_factory=list)
-    tpot_ms: List[float] = field(default_factory=list)
+    ttft_ms: list[float] = field(default_factory=list)
+    tpot_ms: list[float] = field(default_factory=list)
     sla_violations: int = 0
     prefix_hit_count: int = 0
     peak_memory_blocks_used: int = 0
 
-    def percentile(self, data: List[float], p: float) -> float:
+    def percentile(self, data: list[float], p: float) -> float:
         if not data:
             return 0.0
         sorted_d = sorted(data)
@@ -151,6 +155,7 @@ class BenchmarkMetrics:
 # Synthetic Workload Generator
 # ============================================================================
 
+
 def generate_workload(
     num_requests: int,
     shared_prefix_ratio: float,
@@ -158,10 +163,10 @@ def generate_workload(
     mean_prompt_len: int = 256,
     mean_gen_len: int = 128,
     seed: int = 42,
-) -> List[SyntheticRequest]:
+) -> list[SyntheticRequest]:
     """Generates a realistic multi-tenant workload with shared prompt prefixes."""
     random.seed(seed)
-    requests: List[SyntheticRequest] = []
+    requests: list[SyntheticRequest] = []
 
     # Common shared system prompt prefix (e.g., 64 tokens)
     common_prefix = [random.randint(100, 5000) for _ in range(64)]
@@ -174,7 +179,9 @@ def generate_workload(
         prompt_len = max(32, int(random.gauss(mean_prompt_len, 64)))
         if random.random() < shared_prefix_ratio:
             remaining_tokens = max(0, prompt_len - len(common_prefix))
-            prompt_tokens = common_prefix + [random.randint(5001, 20000) for _ in range(remaining_tokens)]
+            prompt_tokens = common_prefix + [
+                random.randint(5001, 20000) for _ in range(remaining_tokens)
+            ]
         else:
             prompt_tokens = [random.randint(5001, 20000) for _ in range(prompt_len)]
 
@@ -213,6 +220,7 @@ def generate_workload(
 # Step Execution Latency Model (Compute + Memory Bound)
 # ============================================================================
 
+
 def estimate_step_execution_time(
     prefill_tokens: int,
     decode_tokens: int,
@@ -225,7 +233,11 @@ def estimate_step_execution_time(
     Prefill: Compute-bound GEMM time.
     Decode: Memory bandwidth-bound lookup time.
     """
-    total_ms = base_step_ms + (prefill_tokens * per_prefill_token_ms) + (decode_tokens * per_decode_token_ms)
+    total_ms = (
+        base_step_ms
+        + (prefill_tokens * per_prefill_token_ms)
+        + (decode_tokens * per_decode_token_ms)
+    )
     return total_ms / 1000.0  # Return in seconds
 
 
@@ -233,10 +245,11 @@ def estimate_step_execution_time(
 # Core Benchmark Engine
 # ============================================================================
 
+
 def run_simulation(
     scheduler_type: str,
     config: SchedulerConfig,
-    workload: List[SyntheticRequest],
+    workload: list[SyntheticRequest],
 ) -> BenchmarkMetrics:
     """Executes discrete event step simulation loop for static vs dynamic schedulers."""
     bm, pt = create_memory_subsystem(config.max_paged_blocks, config.block_size)
@@ -249,13 +262,15 @@ def run_simulation(
             block_size=config.block_size,
             enable_prefix_caching=True,
         )
-        scheduler: Union[DynamicScheduler, Scheduler] = DynamicScheduler(config=dyn_config, block_manager=bm, page_table=pt)
+        scheduler: DynamicScheduler | Scheduler = DynamicScheduler(
+            config=dyn_config, block_manager=bm, page_table=pt
+        )
     else:
         scheduler = Scheduler(config=config, block_manager=bm, page_table=pt)
 
     metrics = BenchmarkMetrics(total_requests=len(workload))
     pending_workload = list(workload)
-    active_seq_meta: Dict[int, Dict] = {}
+    active_seq_meta: dict[int, dict] = {}
 
     current_sim_time = 0.0
 
@@ -266,7 +281,7 @@ def run_simulation(
         arrived = [r for r in pending_workload if r.arrival_time <= current_sim_time]
         for req in arrived:
             pending_workload.remove(req)
-            
+
             if isinstance(scheduler, DynamicScheduler):
                 seq_id = scheduler.add_dynamic_sequence(
                     request_id=req.request_id,
@@ -281,7 +296,7 @@ def run_simulation(
                     prompt_token_ids=req.prompt_token_ids,
                     max_new_tokens=req.max_new_tokens,
                 )
-            
+
             active_seq_meta[seq_id] = {
                 "arrival_time": req.arrival_time,
                 "first_token_time": None,
@@ -310,7 +325,9 @@ def run_simulation(
         decode_token_count = len(batch.decode_seqs)
 
         # Estimate hardware execution step duration
-        step_delta_sec = estimate_step_execution_time(prefill_token_count, decode_token_count)
+        step_delta_sec = estimate_step_execution_time(
+            prefill_token_count, decode_token_count
+        )
 
         # 3. Process prefill pass
         for seq in batch.prefill_seqs:
@@ -320,7 +337,7 @@ def run_simulation(
                     metrics.prefix_hit_count += 1
 
                 meta["first_token_time"] = current_sim_time + step_delta_sec
-            
+
                 ttft = (meta["first_token_time"] - meta["arrival_time"]) * 1000.0
                 metrics.ttft_ms.append(ttft)
                 if ttft > meta["sla_ttft_ms"]:
@@ -356,9 +373,13 @@ def run_simulation(
 # Results Display Engine
 # ============================================================================
 
+
 def print_results(static_m: BenchmarkMetrics, dyn_m: BenchmarkMetrics) -> None:
     """Prints comprehensive side-by-side performance comparison table."""
-    def calc_delta(val_dyn: float, val_stat: float, lower_is_better: bool = True) -> str:
+
+    def calc_delta(
+        val_dyn: float, val_stat: float, lower_is_better: bool = True
+    ) -> str:
         if val_stat == 0.0:
             return "N/A"
         pct = ((val_dyn - val_stat) / val_stat) * 100.0
@@ -369,8 +390,16 @@ def print_results(static_m: BenchmarkMetrics, dyn_m: BenchmarkMetrics) -> None:
         else:
             return f"[bold red]{pct:+.1f}%[/bold red]"
 
-    s_tps = static_m.total_generated_tokens / static_m.simulation_duration_sec if static_m.simulation_duration_sec > 0 else 0
-    d_tps = dyn_m.total_generated_tokens / dyn_m.simulation_duration_sec if dyn_m.simulation_duration_sec > 0 else 0
+    s_tps = (
+        static_m.total_generated_tokens / static_m.simulation_duration_sec
+        if static_m.simulation_duration_sec > 0
+        else 0
+    )
+    d_tps = (
+        dyn_m.total_generated_tokens / dyn_m.simulation_duration_sec
+        if dyn_m.simulation_duration_sec > 0
+        else 0
+    )
 
     if HAS_RICH:
         console = Console()
@@ -384,52 +413,166 @@ def print_results(static_m: BenchmarkMetrics, dyn_m: BenchmarkMetrics) -> None:
         table.add_column("Dynamic Scheduler", justify="right", style="bold green")
         table.add_column("Performance Delta", justify="right")
 
-        table.add_row("Completed Requests", f"{static_m.completed_requests}", f"{dyn_m.completed_requests}", "")
-        table.add_row("Preemption Count", f"{static_m.preemption_count}", f"{dyn_m.preemption_count}", calc_delta(dyn_m.preemption_count, static_m.preemption_count))
-        table.add_row("Prefix Cache Hits", "0", f"{dyn_m.prefix_hit_count}", "[bold green]N/A (New)[/bold green]")
-        table.add_row("SLA TTFT Violations", f"{static_m.sla_violations}", f"{dyn_m.sla_violations}", calc_delta(dyn_m.sla_violations, static_m.sla_violations))
+        table.add_row(
+            "Completed Requests",
+            f"{static_m.completed_requests}",
+            f"{dyn_m.completed_requests}",
+            "",
+        )
+        table.add_row(
+            "Preemption Count",
+            f"{static_m.preemption_count}",
+            f"{dyn_m.preemption_count}",
+            calc_delta(dyn_m.preemption_count, static_m.preemption_count),
+        )
+        table.add_row(
+            "Prefix Cache Hits",
+            "0",
+            f"{dyn_m.prefix_hit_count}",
+            "[bold green]N/A (New)[/bold green]",
+        )
+        table.add_row(
+            "SLA TTFT Violations",
+            f"{static_m.sla_violations}",
+            f"{dyn_m.sla_violations}",
+            calc_delta(dyn_m.sla_violations, static_m.sla_violations),
+        )
         table.add_section()
 
-        table.add_row("Throughput (TPS)", f"{s_tps:.2f} tok/s", f"{d_tps:.2f} tok/s", calc_delta(d_tps, s_tps, lower_is_better=False))
-        table.add_row("TTFT (P50)", f"{static_m.percentile(static_m.ttft_ms, 50):.2f} ms", f"{dyn_m.percentile(dyn_m.ttft_ms, 50):.2f} ms", calc_delta(dyn_m.percentile(dyn_m.ttft_ms, 50), static_m.percentile(static_m.ttft_ms, 50)))
-        table.add_row("TTFT (P90)", f"{static_m.percentile(static_m.ttft_ms, 90):.2f} ms", f"{dyn_m.percentile(dyn_m.ttft_ms, 90):.2f} ms", calc_delta(dyn_m.percentile(dyn_m.ttft_ms, 90), static_m.percentile(static_m.ttft_ms, 90)))
-        table.add_row("TTFT (P99)", f"{static_m.percentile(static_m.ttft_ms, 99):.2f} ms", f"{dyn_m.percentile(dyn_m.ttft_ms, 99):.2f} ms", calc_delta(dyn_m.percentile(dyn_m.ttft_ms, 99), static_m.percentile(static_m.ttft_ms, 99)))
+        table.add_row(
+            "Throughput (TPS)",
+            f"{s_tps:.2f} tok/s",
+            f"{d_tps:.2f} tok/s",
+            calc_delta(d_tps, s_tps, lower_is_better=False),
+        )
+        table.add_row(
+            "TTFT (P50)",
+            f"{static_m.percentile(static_m.ttft_ms, 50):.2f} ms",
+            f"{dyn_m.percentile(dyn_m.ttft_ms, 50):.2f} ms",
+            calc_delta(
+                dyn_m.percentile(dyn_m.ttft_ms, 50),
+                static_m.percentile(static_m.ttft_ms, 50),
+            ),
+        )
+        table.add_row(
+            "TTFT (P90)",
+            f"{static_m.percentile(static_m.ttft_ms, 90):.2f} ms",
+            f"{dyn_m.percentile(dyn_m.ttft_ms, 90):.2f} ms",
+            calc_delta(
+                dyn_m.percentile(dyn_m.ttft_ms, 90),
+                static_m.percentile(static_m.ttft_ms, 90),
+            ),
+        )
+        table.add_row(
+            "TTFT (P99)",
+            f"{static_m.percentile(static_m.ttft_ms, 99):.2f} ms",
+            f"{dyn_m.percentile(dyn_m.ttft_ms, 99):.2f} ms",
+            calc_delta(
+                dyn_m.percentile(dyn_m.ttft_ms, 99),
+                static_m.percentile(static_m.ttft_ms, 99),
+            ),
+        )
         table.add_section()
 
-        table.add_row("TPOT (P50)", f"{static_m.percentile(static_m.tpot_ms, 50):.2f} ms", f"{dyn_m.percentile(dyn_m.tpot_ms, 50):.2f} ms", calc_delta(dyn_m.percentile(dyn_m.tpot_ms, 50), static_m.percentile(static_m.tpot_ms, 50)))
-        table.add_row("TPOT (P99)", f"{static_m.percentile(static_m.tpot_ms, 99):.2f} ms", f"{dyn_m.percentile(dyn_m.tpot_ms, 99):.2f} ms", calc_delta(dyn_m.percentile(dyn_m.tpot_ms, 99), static_m.percentile(static_m.tpot_ms, 99)))
+        table.add_row(
+            "TPOT (P50)",
+            f"{static_m.percentile(static_m.tpot_ms, 50):.2f} ms",
+            f"{dyn_m.percentile(dyn_m.tpot_ms, 50):.2f} ms",
+            calc_delta(
+                dyn_m.percentile(dyn_m.tpot_ms, 50),
+                static_m.percentile(static_m.tpot_ms, 50),
+            ),
+        )
+        table.add_row(
+            "TPOT (P99)",
+            f"{static_m.percentile(static_m.tpot_ms, 99):.2f} ms",
+            f"{dyn_m.percentile(dyn_m.tpot_ms, 99):.2f} ms",
+            calc_delta(
+                dyn_m.percentile(dyn_m.tpot_ms, 99),
+                static_m.percentile(static_m.tpot_ms, 99),
+            ),
+        )
 
         console.print(Panel(table, expand=False))
     else:
-        print("\n===========================================================================")
+        print(
+            "\n==========================================================================="
+        )
         print(" NexusCache Engine: Static vs. Dynamic Scheduler Benchmark Results")
-        print("===========================================================================")
-        print(f"Total Completed Requests  : Static={static_m.completed_requests} | Dynamic={dyn_m.completed_requests}")
-        print(f"Preemptions               : Static={static_m.preemption_count} | Dynamic={dyn_m.preemption_count}")
-        print(f"Prefix Cache Hits         : Static=0 | Dynamic={dyn_m.prefix_hit_count}")
-        print(f"SLA Violations            : Static={static_m.sla_violations} | Dynamic={dyn_m.sla_violations}")
-        print(f"Token Throughput (TPS)    : Static={s_tps:.2f} tok/s | Dynamic={d_tps:.2f} tok/s")
-        print(f"TTFT (P50 / P99)          : Static={static_m.percentile(static_m.ttft_ms, 50):.2f} / {static_m.percentile(static_m.ttft_ms, 99):.2f} ms")
-        print(f"                            Dynamic={dyn_m.percentile(dyn_m.ttft_ms, 50):.2f} / {dyn_m.percentile(dyn_m.ttft_ms, 99):.2f} ms")
-        print("===========================================================================\n")
+        print(
+            "==========================================================================="
+        )
+        print(
+            f"Total Completed Requests  : Static={static_m.completed_requests} | Dynamic={dyn_m.completed_requests}"
+        )
+        print(
+            f"Preemptions               : Static={static_m.preemption_count} | Dynamic={dyn_m.preemption_count}"
+        )
+        print(
+            f"Prefix Cache Hits         : Static=0 | Dynamic={dyn_m.prefix_hit_count}"
+        )
+        print(
+            f"SLA Violations            : Static={static_m.sla_violations} | Dynamic={dyn_m.sla_violations}"
+        )
+        print(
+            f"Token Throughput (TPS)    : Static={s_tps:.2f} tok/s | Dynamic={d_tps:.2f} tok/s"
+        )
+        print(
+            f"TTFT (P50 / P99)          : Static={static_m.percentile(static_m.ttft_ms, 50):.2f} / {static_m.percentile(static_m.ttft_ms, 99):.2f} ms"
+        )
+        print(
+            f"                            Dynamic={dyn_m.percentile(dyn_m.ttft_ms, 50):.2f} / {dyn_m.percentile(dyn_m.ttft_ms, 99):.2f} ms"
+        )
+        print(
+            "===========================================================================\n"
+        )
 
 
 # ============================================================================
 # CLI Entrypoint
 # ============================================================================
 
+
 def main():
-    parser = argparse.ArgumentParser(description="NexusCache Static vs. Dynamic Scheduler Benchmark")
-    parser.add_argument("--num-requests", type=int, default=300, help="Total synthetic requests to simulate")
-    parser.add_argument("--request-rate", type=float, default=60.0, help="Arrival QPS (Poisson distribution)")
-    parser.add_argument("--shared-prefix-ratio", type=float, default=0.50, help="Ratio of requests sharing system prompt prefix")
-    parser.add_argument("--max-vram-blocks", type=int, default=64, help="Hardware KV-cache block budget")
-    parser.add_argument("--block-size", type=int, default=16, help="Token block allocation quantum")
-    parser.add_argument("--output-json", type=str, default=None, help="Save comparison summary to JSON file")
+    parser = argparse.ArgumentParser(
+        description="NexusCache Static vs. Dynamic Scheduler Benchmark"
+    )
+    parser.add_argument(
+        "--num-requests",
+        type=int,
+        default=300,
+        help="Total synthetic requests to simulate",
+    )
+    parser.add_argument(
+        "--request-rate",
+        type=float,
+        default=60.0,
+        help="Arrival QPS (Poisson distribution)",
+    )
+    parser.add_argument(
+        "--shared-prefix-ratio",
+        type=float,
+        default=0.50,
+        help="Ratio of requests sharing system prompt prefix",
+    )
+    parser.add_argument(
+        "--max-vram-blocks", type=int, default=64, help="Hardware KV-cache block budget"
+    )
+    parser.add_argument(
+        "--block-size", type=int, default=16, help="Token block allocation quantum"
+    )
+    parser.add_argument(
+        "--output-json",
+        type=str,
+        default=None,
+        help="Save comparison summary to JSON file",
+    )
 
     args = parser.parse_args()
 
-    print(f"Generating synthetic workload ({args.num_requests} requests, QPS={args.request_rate}, Prefix Sharing={args.shared_prefix_ratio*100:.0f}%)...")
+    print(
+        f"Generating synthetic workload ({args.num_requests} requests, QPS={args.request_rate}, Prefix Sharing={args.shared_prefix_ratio*100:.0f}%)..."
+    )
     workload = generate_workload(
         num_requests=args.num_requests,
         shared_prefix_ratio=args.shared_prefix_ratio,

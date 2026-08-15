@@ -1,5 +1,5 @@
 import torch
-from typing import List
+
 try:
     import nexuscache._C as _C
 except ImportError:
@@ -63,19 +63,20 @@ class NexusCacheEngine:
     def free_sequence(self, sequence_id: int) -> None:
         self.page_table.free_sequence(sequence_id)
 
-    def prepare_kernel_metadata(self, sequence_ids: List[int], query_lens: List[int], device="cuda"):
-    # Convert torch.device instance or object to string if necessary
+    def prepare_kernel_metadata(
+        self, sequence_ids: list[int], query_lens: list[int], device="cuda"
+    ):
+        # Convert torch.device instance or object to string if necessary
         device_str = str(device)  # e.g., converts torch.device("cuda:0") -> "cuda:0"
 
         block_tables = self.page_table.get_block_table_tensor(
-        sequence_ids=sequence_ids, 
-        device=device_str  # <--- Pass device as string!
+            sequence_ids=sequence_ids, device=device_str  # <--- Pass device as string!
         )
-    
+
         slot_mapping = self.page_table.get_slot_mapping_tensor(
-            sequence_ids=sequence_ids, 
-            query_lens=query_lens, 
-            device=device_str  # <--- Pass device as string!
+            sequence_ids=sequence_ids,
+            query_lens=query_lens,
+            device=device_str,  # <--- Pass device as string!
         )
 
         return block_tables, slot_mapping

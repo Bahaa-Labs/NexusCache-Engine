@@ -2,7 +2,6 @@
 Unit Tests for Queueing Theory & Drop-Rate Modeling Engine
 """
 
-import pytest
 from nexuscache.analytics.queue_model import FiniteQueueModel, LoadSheddingOptimizer
 
 
@@ -30,10 +29,14 @@ class TestQueueModel:
     def test_mg1k_variance_impact(self):
         """Verify M/G/1/K wait times increase when service variance increases."""
         model = FiniteQueueModel(service_rate_mu=100.0, queue_capacity_k=20)
-        
+
         # Low variance vs high variance service
-        m_low = model.analyze_mg1k_approximation(arrival_rate_lambda=80.0, service_variance=0.00001)
-        m_high = model.analyze_mg1k_approximation(arrival_rate_lambda=80.0, service_variance=0.001)
+        m_low = model.analyze_mg1k_approximation(
+            arrival_rate_lambda=80.0, service_variance=0.00001
+        )
+        m_high = model.analyze_mg1k_approximation(
+            arrival_rate_lambda=80.0, service_variance=0.001
+        )
 
         assert m_high.avg_wait_time_wq_ms > m_low.avg_wait_time_wq_ms
 
@@ -43,13 +46,19 @@ class TestQueueModel:
 
         # Under low load, no shedding
         policy_normal = optimizer.evaluate_shedding_threshold(
-            current_queue_depth=2, arrival_rate_lambda=50.0, service_rate_mu=100.0, max_capacity_k=20
+            current_queue_depth=2,
+            arrival_rate_lambda=50.0,
+            service_rate_mu=100.0,
+            max_capacity_k=20,
         )
         assert not policy_normal.recommended_shed_action
 
         # Under severe spike, shedding recommended
         policy_spike = optimizer.evaluate_shedding_threshold(
-            current_queue_depth=15, arrival_rate_lambda=250.0, service_rate_mu=100.0, max_capacity_k=20
+            current_queue_depth=15,
+            arrival_rate_lambda=250.0,
+            service_rate_mu=100.0,
+            max_capacity_k=20,
         )
         assert policy_spike.recommended_shed_action
         assert policy_spike.rejection_probability > 0.0

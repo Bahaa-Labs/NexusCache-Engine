@@ -1,6 +1,7 @@
 import os
 import sys
-from setuptools import setup, find_packages
+
+from setuptools import find_packages, setup
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -46,8 +47,10 @@ if not skip_cuda_build:
                 "-O3",
                 "-std=c++17",
                 "--use_fast_math",
-                "-Xptxas", "-O3",
-                "-Xcompiler", "-fPIC",
+                "-Xptxas",
+                "-O3",
+                "-Xcompiler",
+                "-fPIC",
             ],
         }
 
@@ -65,7 +68,9 @@ if not skip_cuda_build:
         cmdclass = {"build_ext": BuildExtension.with_options(no_python_abi_suffix=True)}
 
     except Exception as e:
-        print(f"[WARN] Failed to configure C++/CUDA extensions: {e}. Building pure Python package.")
+        print(
+            f"[WARN] Failed to configure C++/CUDA extensions: {e}. Building pure Python package."
+        )
 
 setup(
     name="nexuscache",

@@ -1,8 +1,7 @@
-import asyncio
-import torch
 import pytest
 import ray
-import nexuscache._C as _C
+import torch
+
 from nexuscache.server.worker import InferenceWorker
 
 
@@ -22,16 +21,14 @@ async def test_inference_worker_ray_execution():
         dtype=torch.float16,
         device_id=0,
     )
-    
+
     # 2. Initialize background continuous batching event loop
     init_ok = await worker.initialize.remote()
     assert init_ok is True
 
     # 3. Stream tokens asynchronously from Ray actor
     gen = worker.generate_stream.remote(
-        request_id="req_001",
-        prompt_token_ids=[101, 102, 103, 104],
-        max_new_tokens=10
+        request_id="req_001", prompt_token_ids=[101, 102, 103, 104], max_new_tokens=10
     )
 
     tokens = []

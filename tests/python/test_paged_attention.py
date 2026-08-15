@@ -4,19 +4,23 @@ Numerical Accuracy & Integration Tests for Paged Attention CUDA Kernel
 """
 
 import math
+
 import pytest
 import torch
 import torch.nn.functional as F
 
 try:
     import nexuscache._C as C_ext
+
     HAS_EXTENSION = True
 except ImportError:
     HAS_EXTENSION = False
 
 
-@pytest.mark.skipif(not (HAS_EXTENSION and torch.cuda.is_available()), 
-                    reason="Requires PyTorch GPU support and compiled nexuscache._C extension.")
+@pytest.mark.skipif(
+    not (HAS_EXTENSION and torch.cuda.is_available()),
+    reason="Requires PyTorch GPU support and compiled nexuscache._C extension.",
+)
 class TestPagedAttentionKernel:
 
     def test_paged_attention_correctness(self):
@@ -35,14 +39,24 @@ class TestPagedAttentionKernel:
 
         # 1. Initialize Direct 4D Physical KV Tensors [num_blocks, num_heads, block_size, head_dim]
         num_blocks = 16
-        key_cache = torch.randn((num_blocks, num_heads, block_size, head_dim), dtype=torch.float16, device=device).contiguous()
-        val_cache = torch.randn((num_blocks, num_heads, block_size, head_dim), dtype=torch.float16, device=device).contiguous()
+        key_cache = torch.randn(
+            (num_blocks, num_heads, block_size, head_dim),
+            dtype=torch.float16,
+            device=device,
+        ).contiguous()
+        val_cache = torch.randn(
+            (num_blocks, num_heads, block_size, head_dim),
+            dtype=torch.float16,
+            device=device,
+        ).contiguous()
 
         # 2. Block table mappings: Seq 0 -> [Block 2, Block 5], Seq 1 -> [Block 1, -1]
         block_tables = [2, 5, 1, -1]
 
         # 3. Create Decoding Query Tensor [num_seqs, num_heads, head_dim]
-        query = torch.randn((num_seqs, num_heads, head_dim), dtype=torch.float16, device=device).contiguous()
+        query = torch.randn(
+            (num_seqs, num_heads, head_dim), dtype=torch.float16, device=device
+        ).contiguous()
         paged_out = torch.zeros_like(query)
 
         # 4. Run CUDA Kernel
@@ -59,7 +73,7 @@ class TestPagedAttentionKernel:
             head_dim=head_dim,
             block_size=block_size,
             scale=scale,
-            stream_ptr=torch.cuda.current_stream().cuda_stream
+            stream_ptr=torch.cuda.current_stream().cuda_stream,
         )
         torch.cuda.synchronize()
 
@@ -75,7 +89,9 @@ class TestPagedAttentionKernel:
 
         # Standard Attention Computation: Softmax(Q @ K.T * scale) @ V
         q0 = query[0].unsqueeze(1)  # [num_heads, 1, head_dim]
-        attn_scores = torch.matmul(q0, keys.transpose(-1, -2)) * scale  # [num_heads, 1, 20]
+        attn_scores = (
+            torch.matmul(q0, keys.transpose(-1, -2)) * scale
+        )  # [num_heads, 1, 20]
         attn_weights = F.softmax(attn_scores, dim=-1)
         ref_out0 = torch.matmul(attn_weights, vals).squeeze(1)  # [num_heads, head_dim]
 

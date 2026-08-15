@@ -6,7 +6,9 @@ and payload serialization.
 """
 
 from copy import deepcopy
+
 import pytest
+
 from nexuscache.analytics.ab_evaluator import (
     ABEvaluatorHarness,
     RequestBenchmarkSample,
@@ -26,7 +28,7 @@ class TestABEvaluator:
             gen_tokens=4,
             arrival_time_s=10.0,
             first_token_time_s=10.05,  # 50 ms TTFT
-            completion_time_s=10.25,   # 250 ms Total
+            completion_time_s=10.25,  # 250 ms Total
             inter_token_latencies_ms=[50.0, 50.0, 50.0, 50.0],
         )
 
@@ -77,7 +79,7 @@ class TestABEvaluator:
         sample_a = deepcopy(sample_base)
         sim_a = StrategyASimulator(static_batch_size=2)
         samples_a, dur_a = sim_a.execute_workload([sample_a])
-        
+
         assert len(samples_a) == 1
         assert dur_a >= 0.0
         assert samples_a[0].strategy_used == "Strategy_A_Static"
@@ -89,7 +91,7 @@ class TestABEvaluator:
         sample_b = deepcopy(sample_base)
         sim_b = StrategyBSimulator(page_size=16)
         samples_b, dur_b = sim_b.execute_workload([sample_b])
-        
+
         assert len(samples_b) == 1
         assert dur_b >= 0.0
         assert samples_b[0].strategy_used == "Strategy_B_Paged"
@@ -104,7 +106,7 @@ class TestABEvaluator:
 
         assert "Strategy_A" in results
         assert "Strategy_B" in results
-        
+
         res_a = results["Strategy_A"]
         res_b = results["Strategy_B"]
 
@@ -115,7 +117,7 @@ class TestABEvaluator:
         assert res_b.total_requests == 20
         assert res_a.throughput_tokens_per_sec > 0
         assert res_b.throughput_tokens_per_sec > 0
-        
+
         # Paged KV-Cache must show lower VRAM fragmentation than static contiguity
         assert res_b.avg_vram_fragmentation_pct < res_a.avg_vram_fragmentation_pct
 
@@ -123,7 +125,7 @@ class TestABEvaluator:
         """Verify StrategyMetricsResult converts seamlessly to dict representations."""
         harness = ABEvaluatorHarness()
         results = harness.run_ab_experiment(num_requests=5, seed=42)
-        
+
         res_dict = results["Strategy_B"].to_dict()
         assert isinstance(res_dict, dict)
         assert res_dict["strategy_name"] == "Strategy_B_Paged"

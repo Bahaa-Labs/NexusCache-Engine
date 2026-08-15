@@ -11,19 +11,19 @@ Features:
 5. Queue Telemetry & Monitoring Metrics.
 """
 
-from dataclasses import dataclass, field
-from enum import IntEnum
+import asyncio
 import heapq
 import logging
 import time
-from typing import Dict, List, Optional, Set, Tuple
-import asyncio
+from dataclasses import dataclass, field
+from enum import IntEnum
 
 logger = logging.getLogger("nexuscache.server.request_queue")
 
 
 class PriorityLevel(IntEnum):
     """Client priority tiers for scheduling precedence."""
+
     CRITICAL = 0
     HIGH = 1
     NORMAL = 2
@@ -32,11 +32,13 @@ class PriorityLevel(IntEnum):
 
 class QueueFullError(Exception):
     """Exception raised when queue capacity is reached (mapped to HTTP 429)."""
+
     pass
 
 
 class RequestTimeoutError(Exception):
     """Exception raised when a request spends too long in the queue."""
+
     pass
 
 
@@ -45,19 +47,20 @@ class QueuedRequest:
     """
     Wrapper for an incoming LLM inference request waiting in the queue.
     """
+
     request_id: str
-    prompt_token_ids: List[int]
+    prompt_token_ids: list[int]
     max_new_tokens: int
     priority: PriorityLevel = PriorityLevel.NORMAL
     sla_target_ttft_ms: float = 100.0
     sla_target_tpot_ms: float = 20.0
-    
+
     # Timing & TTL
     arrival_time: float = field(default_factory=time.perf_counter)
     timeout_s: float = 30.0  # Client timeout threshold in queue
-    
+
     # Event loop response future for returning completion stream/tokens
-    response_future: Optional[asyncio.Future] = None
+    response_future: asyncio.Future | None = None
 
     @property
     def is_expired(self) -> bool:
@@ -78,6 +81,7 @@ class PriorityHeapEntry:
     2. Arrival Time (earlier timestamps come first -> FCFS within same tier)
     3. Sequence Counter (tie breaker)
     """
+
     priority: int
     arrival_time: float
     sequence_id: int
@@ -87,6 +91,7 @@ class PriorityHeapEntry:
 @dataclass
 class QueueMetrics:
     """Telemetry counters for monitoring request queue health."""
+
     total_enqueued: int = 0
     total_dequeued: int = 0
     total_rejected_429: int = 0
@@ -110,9 +115,9 @@ class RequestQueue:
         self.default_timeout_s = default_timeout_s
 
         # Internal storage
-        self._heap: List[PriorityHeapEntry] = []
-        self._requests_map: Dict[str, QueuedRequest] = {}
-        self._cancelled_request_ids: Set[str] = set()
+        self._heap: list[PriorityHeapEntry] = []
+        self._requests_map: dict[str, QueuedRequest] = {}
+        self._cancelled_request_ids: set[str] = set()
 
         # State tracking
         self._current_token_count: int = 0
@@ -129,7 +134,7 @@ class RequestQueue:
     async def put(self, request: QueuedRequest) -> None:
         """
         Enqueues an incoming request into the priority queue.
-        
+
         Raises:
             QueueFullError: If queue size or prompt token budget exceeds capacity (HTTP 429 trigger).
         """
@@ -145,13 +150,18 @@ class RequestQueue:
                     f"Server queue is full ({self.max_queue_size} requests pending). Retry later."
                 )
 
-            if self._current_token_count + request.num_prompt_tokens > self.max_token_capacity:
+            if (
+                self._current_token_count + request.num_prompt_tokens
+                > self.max_token_capacity
+            ):
                 self._metrics.total_rejected_429 += 1
                 logger.warning(
                     f"[RequestQueue] Rejection 429: Token memory budget exceeded "
                     f"({self._current_token_count}/{self.max_token_capacity}) for request {request.request_id}."
                 )
-                raise QueueFullError("Server token processing capacity exhausted. Retry later.")
+                raise QueueFullError(
+                    "Server token processing capacity exhausted. Retry later."
+                )
 
             # 2. Assign default timeout if not set
             if request.timeout_s <= 0:
@@ -181,7 +191,7 @@ class RequestQueue:
 
     async def get_batch(
         self, max_num_seqs: int, max_num_tokens: int
-    ) -> List[QueuedRequest]:
+    ) -> list[QueuedRequest]:
         """
         Pulls a batch of valid requests ordered by priority and arrival time.
         Filters out expired and cancelled requests automatically.
@@ -197,7 +207,7 @@ class RequestQueue:
                 # Wait for new incoming requests
                 await self._condition.wait()
 
-            batch: List[QueuedRequest] = []
+            batch: list[QueuedRequest] = []
             batched_tokens = 0
 
             while self._heap and len(batch) < max_num_seqs:
@@ -228,7 +238,10 @@ class RequestQueue:
         Marks ID as cancelled for lazy removal during dequeue.
         """
         async with self._condition:
-            if request_id in self._requests_map and request_id not in self._cancelled_request_ids:
+            if (
+                request_id in self._requests_map
+                and request_id not in self._cancelled_request_ids
+            ):
                 self._cancelled_request_ids.add(request_id)
                 self._metrics.total_cancelled += 1
                 logger.info(f"[RequestQueue] Request {request_id} aborted by client.")
@@ -243,10 +256,12 @@ class RequestQueue:
         """Pops and removes the top item from internal heap and index map."""
         entry = heapq.heappop(self._heap)
         req = entry.request
-        
+
         self._requests_map.pop(req.request_id, None)
         self._cancelled_request_ids.discard(req.request_id)
-        self._current_token_count = max(0, self._current_token_count - req.num_prompt_tokens)
+        self._current_token_count = max(
+            0, self._current_token_count - req.num_prompt_tokens
+        )
         return req
 
     def _purge_expired_and_cancelled(self) -> None:
@@ -255,7 +270,9 @@ class RequestQueue:
             top_req = self._heap[0].request
 
             if top_req.request_id in self._cancelled_request_ids:
-                logger.debug(f"[RequestQueue] Purging cancelled request: {top_req.request_id}")
+                logger.debug(
+                    f"[RequestQueue] Purging cancelled request: {top_req.request_id}"
+                )
                 self._pop_top_heap_entry()
                 continue
 
@@ -265,11 +282,13 @@ class RequestQueue:
                     f"[RequestQueue] Dropping timed-out request {top_req.request_id} "
                     f"(waited {time.perf_counter() - top_req.arrival_time:.2f}s > {top_req.timeout_s}s)"
                 )
-                
+
                 # Exception hook for client response task if future exists
                 if top_req.response_future and not top_req.response_future.done():
                     top_req.response_future.set_exception(
-                        RequestTimeoutError("Request timed out waiting in scheduler queue.")
+                        RequestTimeoutError(
+                            "Request timed out waiting in scheduler queue."
+                        )
                     )
 
                 self._pop_top_heap_entry()
@@ -292,7 +311,7 @@ class RequestQueue:
         """Total prompt tokens pending in queue."""
         return self._current_token_count
 
-    def get_metrics(self) -> Dict[str, int]:
+    def get_metrics(self) -> dict[str, int]:
         """Returns current telemetry metrics snapshot."""
         return {
             "current_queue_depth": len(self._requests_map),
