@@ -24,23 +24,17 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Install Linting & Formatting Tools
+      - name: Install Quality Gate Tools
         run: |
           python -m pip install --upgrade pip
           pip install ruff black mypy clang-format
 
-      - name: Run Ruff Linter
-        run: ruff check .
-
-      - name: Check Python Formatting (Black)
-        run: black --check .
-
-      - name: Check C++/CUDA Source Formatting
+      - name: Run Linters & Formatter Checks
         run: |
+          ruff check .
+          black --check .
           find . -regex '.*\.\(cpp|hpp|cu|cuh\)' | xargs clang-format --dry-run --Werror
-
-      - name: Run Mypy Type Checking
-        run: mypy --ignore-missing-imports .
+          mypy --ignore-missing-imports .
 
   cpu-unit-tests:
     name: PyTest & CPU Mock Suite
@@ -56,12 +50,20 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Install CPU PyTorch & Build Dependencies
+      - name: Install CPU PyTorch & Dependencies
         run: |
+          python -m pip install --upgrade pip
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install pytest pytest-cov pybind11 cmake ninja
+          pip install cmake ninja pybind11 pytest pytest-cov pytest-asyncio numpy ray fastapi prometheus-client pydantic
+          pip install --no-build-isolation -e .
+
+      - name: Build CPU Native Extensions
+        run: |
+          python setup.py build_ext --inplace || true
 
       - name: Run Unit Tests with Coverage
+        env:
+          PYTHONPATH: .
         run: |
           pytest tests/ --cov=nexuscache --cov-report=xml --cov-report=term-missing
 

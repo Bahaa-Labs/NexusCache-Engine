@@ -12,6 +12,10 @@ on:
       - 'Dockerfile'
       - '.github/workflows/cuda-build.yml'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   cuda-compile:
     name: NVCC Build Verification (CUDA 12.1 + PyTorch 2.3)
@@ -25,22 +29,25 @@ jobs:
       - name: Install System Dependencies
         run: |
           apt-get update && apt-get install -y --no-install-recommends \
-            python3-pip python3-dev build-essential cmake ninja-build git
-          ln -s /usr/bin/python3 /usr/bin/python
+            python3-pip python3-dev build-essential cmake ninja-build git \
+            && rm -rf /var/lib/apt/lists/*
+          ln -sf /usr/bin/python3 /usr/bin/python
 
-      - name: Install PyTorch & PyBind11
+      - name: Install Python & Build Dependencies
         run: |
-          pip3 install --upgrade pip
+          python3 -m pip install --upgrade pip setuptools wheel
           pip3 install torch --index-url https://download.pytorch.org/whl/cu121
-          pip3 install pybind11 pytest
+          pip3 install pybind11 pytest numpy ray fastapi prometheus-client pydantic
 
       - name: Build C++/CUDA Extensions
         run: |
           python3 setup.py build_ext --inplace
+          pip3 install --no-build-isolation -e .
 
-      - name: Test C++ Extension Imports
+      - name: Test Extensions & Environment Setup
         run: |
           python3 -c "import torch; print('PyTorch CUDA available:', torch.cuda.is_available())"
+          python3 -c "import nexuscache; print('NexusCache package verified')"
 
   docker-build:
     name: Production Container Image Build Test
