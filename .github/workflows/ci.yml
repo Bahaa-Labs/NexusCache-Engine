@@ -1,0 +1,73 @@
+name: NexusCache CI/CD Core Gate
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  code-quality:
+    name: Code Quality & Static Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Linting & Formatting Tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff black mypy clang-format
+
+      - name: Run Ruff Linter
+        run: ruff check .
+
+      - name: Check Python Formatting (Black)
+        run: black --check .
+
+      - name: Check C++/CUDA Source Formatting
+        run: |
+          find . -regex '.*\.\(cpp|hpp|cu|cuh\)' | xargs clang-format --dry-run --Werror
+
+      - name: Run Mypy Type Checking
+        run: mypy --ignore-missing-imports .
+
+  cpu-unit-tests:
+    name: PyTest & CPU Mock Suite
+    needs: code-quality
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install CPU PyTorch & Build Dependencies
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install pytest pytest-cov pybind11 cmake ninja
+
+      - name: Run Unit Tests with Coverage
+        run: |
+          pytest tests/ --cov=nexuscache --cov-report=xml --cov-report=term-missing
+
+      - name: Upload Code Coverage Report
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.xml
+          fail_ci_if_error: false

@@ -1,0 +1,63 @@
+name: CUDA Kernel Compilation & Docker Build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    paths:
+      - 'csrc/**'
+      - 'nexuscache/**'
+      - 'CMakeLists.txt'
+      - 'setup.py'
+      - 'Dockerfile'
+      - '.github/workflows/cuda-build.yml'
+
+jobs:
+  cuda-compile:
+    name: NVCC Build Verification (CUDA 12.1 + PyTorch 2.3)
+    runs-on: ubuntu-latest
+    container:
+      image: nvidia/cuda:12.1.0-devel-ubuntu22.04
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install System Dependencies
+        run: |
+          apt-get update && apt-get install -y --no-install-recommends \
+            python3-pip python3-dev build-essential cmake ninja-build git
+          ln -s /usr/bin/python3 /usr/bin/python
+
+      - name: Install PyTorch & PyBind11
+        run: |
+          pip3 install --upgrade pip
+          pip3 install torch --index-url https://download.pytorch.org/whl/cu121
+          pip3 install pybind11 pytest
+
+      - name: Build C++/CUDA Extensions
+        run: |
+          python3 setup.py build_ext --inplace
+
+      - name: Test C++ Extension Imports
+        run: |
+          python3 -c "import torch; print('PyTorch CUDA available:', torch.cuda.is_available())"
+
+  docker-build:
+    name: Production Container Image Build Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker Image (Dry Run)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          tags: nexuscache-engine:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
