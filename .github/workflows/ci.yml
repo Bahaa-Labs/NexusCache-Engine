@@ -58,6 +58,9 @@ jobs:
                       numpy pandas scipy ray fastapi prometheus-client pydantic
 
       - name: Build C++ Extension Modules
+        env:
+          FORCE_CUDA: "0"
+          MAX_JOBS: "2"
         run: |
           python setup.py build_ext --inplace
           pip install --no-build-isolation -e .
